@@ -32,7 +32,6 @@ class TrainResponse(BaseModel):
 
 class PredictRequest(BaseModel):
     days: int = Field(default=7, ge=1, le=30)
-    future_csv_path: str | None = None
 
 
 class PredictionRow(BaseModel):

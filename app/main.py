@@ -40,11 +40,9 @@ def train(req: TrainRequest) -> TrainResponse:
 def predict(req: PredictRequest) -> PredictResponse:
     days = req.days or config.default_prediction_days
     try:
-        payload = service.predict_next_days(days=days, future_csv_path=req.future_csv_path)
+        payload = service.predict_next_days(days=days)
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:

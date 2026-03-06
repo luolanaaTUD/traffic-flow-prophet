@@ -15,13 +15,21 @@ OPTIONAL_FEATURE_COLUMNS = [
     "is_severe_weather",
 ]
 NUMERIC_COLUMNS = ["y", "temp_max", "weather_score"] + OPTIONAL_FEATURE_COLUMNS
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def resolve_csv_path(csv_path: str) -> Path:
     path = Path(csv_path).expanduser()
     if not path.is_absolute():
-        path = Path.cwd() / path
-    return path
+        cwd_candidate = (Path.cwd() / path).resolve()
+        root_candidate = (PROJECT_ROOT / path).resolve()
+        if cwd_candidate.exists():
+            return cwd_candidate
+        if root_candidate.exists():
+            return root_candidate
+        # Prefer project-root-relative paths as canonical API input.
+        return root_candidate
+    return path.resolve()
 
 
 def load_training_csv(csv_path: str) -> pd.DataFrame:
@@ -82,28 +90,6 @@ def enrich_weather_features(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def load_future_features_csv(csv_path: str) -> pd.DataFrame:
-    path = resolve_csv_path(csv_path)
-    if not path.exists():
-        raise FileNotFoundError(f"Future-features CSV not found: {path}")
-
-    out = pd.read_csv(path).copy()
-    if "ds" not in out.columns:
-        raise ValueError("Future-features CSV must include `ds` column.")
-
-    out["ds"] = pd.to_datetime(out["ds"])
-    for col in NUMERIC_COLUMNS:
-        if col in out.columns:
-            out[col] = pd.to_numeric(out[col], errors="coerce")
-
-    # If core weather features are present, generate optional columns as needed.
-    if "temp_max" in out.columns and "weather_score" in out.columns:
-        out = enrich_weather_features(out)
-
-    out = out.sort_values("ds").drop_duplicates(subset=["ds"], keep="last").reset_index(drop=True)
-    return out
-
-
 def build_future_features_from_history(
     history_df: pd.DataFrame,
     regressors: list[str],
@@ -146,4 +132,3 @@ def build_future_features_from_history(
         future["weather_score"] = future["weather_score"].clip(lower=0.2, upper=1.0)
 
     return future.drop(columns=["dow"])
-

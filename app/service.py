@@ -10,7 +10,6 @@ from prophet import Prophet
 from app.data_processing import (
     build_future_features_from_history,
     enrich_weather_features,
-    load_future_features_csv,
     load_training_csv,
     validate_training_df,
 )
@@ -89,23 +88,19 @@ class TrafficModelService:
             ],
         }
 
-    def predict_next_days(self, days: int = 7, future_csv_path: str | None = None) -> dict:
+    def predict_next_days(self, days: int = 7) -> dict:
         with self._lock:
             artifacts = self._artifacts
 
         if artifacts is None:
             raise RuntimeError("Model is not trained. Call /train first.")
 
-        if future_csv_path:
-            future_df = load_future_features_csv(future_csv_path)
-            generated_from = "future_csv"
-        else:
-            future_df = build_future_features_from_history(
-                history_df=artifacts.train_df,
-                regressors=artifacts.regressors,
-                days=days,
-            )
-            generated_from = "historical_profile"
+        future_df = build_future_features_from_history(
+            history_df=artifacts.train_df,
+            regressors=artifacts.regressors,
+            days=days,
+        )
+        generated_from = "historical_profile"
 
         if days and len(future_df) < days:
             raise ValueError(f"Future features must contain at least {days} rows.")

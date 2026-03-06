@@ -1,35 +1,121 @@
 # Traffic Flow Prophet Backend
 
-Backend API built from the notebook logic. It supports:
+Chinese version: [README.zh-CN.md](README.zh-CN.md)
 
-- training fixed Prophet `multi_weather_regressors` model from historical traffic CSV
-- predicting next 7 days traffic
+This backend is extracted from the notebook workflow and provides:
 
-## 1. Run with uv
+- model training from historical traffic CSV
+- next-7-days traffic prediction API
+
+The training model is fixed to `multi_weather_regressors` (no baseline switch).
+
+## 1. Quick Start
 
 ```bash
 uv sync
 uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-Open API docs:
+Swagger docs:
 
 - http://127.0.0.1:8000/docs
 
-## 2. Data format
+## 2. Project Paths
 
-Training CSV must include:
+- Training data folder: `data/` (same level as `app/`)
+- Default training CSV: `data/historical_flow.csv`
 
-- `ds` (date)
-- `y` (traffic count)
-- `temp_max` (max temperature)
-- `weather_score` (weather impact score)
+For relative paths (for example `data/historical_flow.csv`), the API resolves paths against project root.
 
-Training window:
+## 3. API
 
-- `max_training_days` defaults to `1095` (up to 3 years of recent history)
+### `GET /health`
 
-Optional columns supported by the multi-regressor model:
+Response example:
+
+```json
+{
+  "status": "ok",
+  "trained": false
+}
+```
+
+### `POST /train`
+
+Request body:
+
+```json
+{
+  "csv_path": "data/historical_flow.csv",
+  "holdout_days": 14,
+  "max_training_days": 1095
+}
+```
+
+Field notes:
+
+- `csv_path`: historical training CSV path
+- `holdout_days`: validation window for MAE/MAPE evaluation
+- `max_training_days`: max history window used for training (up to 3 years = `1095`)
+
+Response includes:
+
+- selected model name (`multi_weather_regressors`)
+- regressors
+- training date range and row count
+- evaluation metrics
+
+### `POST /predict/next-7-days`
+
+Request body:
+
+```json
+{
+  "days": 7
+}
+```
+
+Notes:
+
+- No `future_csv_path` parameter.
+- Future features are generated internally from historical profile.
+
+Response example:
+
+```json
+{
+  "model_name": "multi_weather_regressors",
+  "regressors": [
+    "temp_max",
+    "precip",
+    "wind_speed_day",
+    "humidity",
+    "uv_index",
+    "is_rain",
+    "is_severe_weather"
+  ],
+  "generated_from": "historical_profile",
+  "predictions": [
+    {
+      "ds": "2026-03-07",
+      "yhat": 3568,
+      "yhat_lower": 3210,
+      "yhat_upper": 3892
+    }
+  ]
+}
+```
+
+## 4. Training CSV Schema
+
+Required columns:
+
+- `ds`
+- `y`
+- `temp_max`
+- `weather_score`
+
+Optional columns (recommended for full multi-regressor quality):
 
 - `precip`
 - `wind_speed_day`
@@ -38,39 +124,4 @@ Optional columns supported by the multi-regressor model:
 - `is_rain`
 - `is_severe_weather`
 
-## 3. API examples
-
-### Train model from CSV
-
-```bash
-curl -X POST http://127.0.0.1:8000/train \
-  -H "Content-Type: application/json" \
-  -d '{
-    "csv_path": "data/historical_flow.csv",
-    "holdout_days": 14,
-    "max_training_days": 1095
-  }'
-```
-
-### Predict next 7 days
-
-Use features inferred from historical profile:
-
-```bash
-curl -X POST http://127.0.0.1:8000/predict/next-7-days \
-  -H "Content-Type: application/json" \
-  -d '{
-    "days": 7
-  }'
-```
-
-Or provide your own future feature CSV:
-
-```bash
-curl -X POST http://127.0.0.1:8000/predict/next-7-days \
-  -H "Content-Type: application/json" \
-  -d '{
-    "days": 7,
-    "future_csv_path": "data/future_features.csv"
-  }'
-```
+If optional weather columns are missing, the service derives reasonable defaults/enrichment from existing fields.

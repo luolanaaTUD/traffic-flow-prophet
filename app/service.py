@@ -8,9 +8,9 @@ import pandas as pd
 from prophet import Prophet
 
 from app.data_processing import (
-    build_future_features_from_history,
-    enrich_weather_features,
+    assess_training_feature_quality,
     load_training_csv,
+    normalize_qweather_daily_forecast,
     validate_training_df,
 )
 from app.modeling import EvaluationResult, train_multi_model
@@ -39,11 +39,11 @@ class TrafficModelService:
         self,
         csv_path: str,
         holdout_days: int = 14,
-        max_training_days: int = 1095,
+        max_training_days: int = 60,
     ) -> dict:
         raw_df = load_training_csv(csv_path)
         train_df = validate_training_df(raw_df)
-        train_df = enrich_weather_features(train_df)
+        quality_report = assess_training_feature_quality(train_df)
         if max_training_days > 0:
             latest_date = train_df["ds"].max().normalize()
             cutoff_date = latest_date - pd.Timedelta(days=max_training_days - 1)
@@ -54,6 +54,7 @@ class TrafficModelService:
         model, model_name, regressors, metrics = train_multi_model(
             df=train_df,
             holdout_days=holdout_days,
+            low_confidence_regressors=set(quality_report["low_confidence_regressors"]),
         )
 
         artifacts = ModelArtifacts(
@@ -86,21 +87,18 @@ class TrafficModelService:
                 }
                 for item in metrics
             ],
+            "quality_report": quality_report,
         }
 
-    def predict_next_days(self, days: int = 7) -> dict:
+    def predict_next_days(self, forecast_rows: list[dict], days: int = 7) -> dict:
         with self._lock:
             artifacts = self._artifacts
 
         if artifacts is None:
             raise RuntimeError("Model is not trained. Call /train first.")
 
-        future_df = build_future_features_from_history(
-            history_df=artifacts.train_df,
-            regressors=artifacts.regressors,
-            days=days,
-        )
-        generated_from = "historical_profile"
+        future_df = normalize_qweather_daily_forecast(forecast_rows)
+        generated_from = "qweather_7d"
 
         if days and len(future_df) < days:
             raise ValueError(f"Future features must contain at least {days} rows.")

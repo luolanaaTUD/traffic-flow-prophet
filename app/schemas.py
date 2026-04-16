@@ -15,9 +15,9 @@ class ModelMetric(BaseModel):
 
 
 class TrainRequest(BaseModel):
-    csv_path: str = Field(default="data/historical_flow.csv")
+    csv_path: str = Field(default="data/historical_flow_from_summary.csv")
     holdout_days: int = Field(default=14, ge=7, le=365)
-    max_training_days: int = Field(default=1095, ge=30, le=1095)
+    max_training_days: int = Field(default=60, ge=60, le=1200)
 
 
 class TrainResponse(BaseModel):
@@ -28,10 +28,25 @@ class TrainResponse(BaseModel):
     end_date: date
     trained_at: datetime
     metrics: list[ModelMetric]
+    quality_report: dict | None = None
 
 
 class PredictRequest(BaseModel):
     days: int = Field(default=7, ge=1, le=30)
+
+
+class QWeatherDailyForecast(BaseModel):
+    fxDate: date
+    tempMax: str
+    tempMin: str
+    windSpeedDay: str
+    windSpeedNight: str
+    humidity: str
+    precip: str
+    pressure: str
+    vis: str
+    cloud: str
+    uvIndex: str
 
 
 class PredictionRow(BaseModel):

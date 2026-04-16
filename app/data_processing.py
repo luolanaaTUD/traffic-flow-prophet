@@ -2,19 +2,36 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
-REQUIRED_COLUMNS = ["ds", "y", "temp_max", "weather_score"]
-OPTIONAL_FEATURE_COLUMNS = [
+REQUIRED_COLUMNS = [
+    "ds",
+    "y",
+    "temp_max",
+    "temp_min",
     "precip",
-    "wind_speed_day",
     "humidity",
+    "pressure",
+    "vis",
+    "cloud",
     "uv_index",
-    "is_rain",
-    "is_severe_weather",
+    "wind_speed_day",
+    "wind_speed_night",
 ]
-NUMERIC_COLUMNS = ["y", "temp_max", "weather_score"] + OPTIONAL_FEATURE_COLUMNS
+NUMERIC_COLUMNS = [col for col in REQUIRED_COLUMNS if col != "ds"]
+FORECAST_CORE_COLUMNS = [
+    "ds",
+    "temp_max",
+    "temp_min",
+    "precip",
+    "humidity",
+    "pressure",
+    "vis",
+    "uv_index",
+    "wind_speed_day",
+    "wind_speed_night",
+]
+WEATHER_FEATURE_COLUMNS = [col for col in REQUIRED_COLUMNS if col not in {"ds", "y"}]
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -40,95 +57,156 @@ def load_training_csv(csv_path: str) -> pd.DataFrame:
 
 
 def validate_training_df(df: pd.DataFrame) -> pd.DataFrame:
-    missing = [col for col in REQUIRED_COLUMNS if col not in df.columns]
+    out = df.copy()
+
+    # Backward compatibility for historical datasets generated with legacy weather_score schema.
+    if "temp_min" not in out.columns and "temp_max" in out.columns:
+        out["temp_min"] = pd.to_numeric(out["temp_max"], errors="coerce") - 8.0
+    if "wind_speed_night" not in out.columns and "wind_speed_day" in out.columns:
+        out["wind_speed_night"] = out["wind_speed_day"]
+    if "weather_score" in out.columns:
+        weather_score = pd.to_numeric(out["weather_score"], errors="coerce").clip(lower=0.2, upper=1.0)
+        if "pressure" not in out.columns:
+            out["pressure"] = 1000 + weather_score * 20
+        if "vis" not in out.columns:
+            out["vis"] = (weather_score * 30).clip(lower=1.0, upper=30.0)
+        if "cloud" not in out.columns:
+            out["cloud"] = ((1 - weather_score) * 100).clip(lower=0.0, upper=100.0)
+
+    missing = [col for col in REQUIRED_COLUMNS if col not in out.columns]
     if missing:
         raise ValueError(f"Missing required columns: {missing}")
 
-    out = df.copy()
     out["ds"] = pd.to_datetime(out["ds"])
 
     for col in NUMERIC_COLUMNS:
         if col in out.columns:
             out[col] = pd.to_numeric(out[col], errors="coerce")
 
-    out = out.dropna(subset=["ds", "y", "temp_max", "weather_score"]).copy()
+    out = out.dropna(subset=REQUIRED_COLUMNS).copy()
     out = out.sort_values("ds").drop_duplicates(subset=["ds"], keep="last").reset_index(drop=True)
     if out.empty:
         raise ValueError("No valid training rows after parsing CSV.")
+    _validate_weather_ranges(out)
+    out["humidity"] = out["humidity"].clip(lower=0, upper=100)
+    out["uv_index"] = out["uv_index"].clip(lower=0, upper=16)
+    out["cloud"] = out["cloud"].clip(lower=0, upper=100)
+    for col in ["precip", "vis", "pressure", "wind_speed_day", "wind_speed_night"]:
+        out[col] = out[col].clip(lower=0)
     return out
 
 
-def enrich_weather_features(df: pd.DataFrame) -> pd.DataFrame:
-    out = df.copy()
+def _validate_weather_ranges(df: pd.DataFrame) -> None:
+    range_specs: dict[str, tuple[float, float]] = {
+        "humidity": (0.0, 100.0),
+        "cloud": (0.0, 100.0),
+        "uv_index": (0.0, 16.0),
+        "precip": (0.0, 500.0),
+        "vis": (0.0, 80.0),
+        "pressure": (850.0, 1100.0),
+        "wind_speed_day": (0.0, 200.0),
+        "wind_speed_night": (0.0, 200.0),
+        "temp_max": (-60.0, 60.0),
+        "temp_min": (-60.0, 60.0),
+    }
+    invalid_messages: list[str] = []
+    for col, (min_allowed, max_allowed) in range_specs.items():
+        if col not in df.columns:
+            continue
+        mask = (df[col] < min_allowed) | (df[col] > max_allowed)
+        invalid_count = int(mask.sum())
+        if invalid_count:
+            invalid_messages.append(
+                f"{col}: {invalid_count} rows outside [{min_allowed}, {max_allowed}]"
+            )
+    if invalid_messages:
+        joined = "; ".join(invalid_messages)
+        raise ValueError(f"Weather fields out of expected QWeather ranges: {joined}")
 
-    if "precip" not in out.columns:
-        out["precip"] = np.select(
-            [
-                out["weather_score"] <= 0.30,
-                out["weather_score"] <= 0.60,
-                out["weather_score"] <= 0.85,
-            ],
-            [15.0, 5.0, 1.0],
-            default=0.0,
+
+def assess_training_feature_quality(df: pd.DataFrame) -> dict:
+    total_rows = max(len(df), 1)
+    low_variance_features: list[str] = []
+    imputed_like_features: list[str] = []
+    stats: dict[str, dict[str, float]] = {}
+
+    for col in WEATHER_FEATURE_COLUMNS:
+        if col not in df.columns:
+            continue
+        nunique = int(df[col].nunique(dropna=True))
+        unique_ratio = nunique / total_rows
+        top_freq = float(df[col].value_counts(normalize=True, dropna=True).iloc[0]) if nunique else 1.0
+        stats[col] = {
+            "nunique": float(nunique),
+            "unique_ratio": round(unique_ratio, 4),
+            "top_value_ratio": round(top_freq, 4),
+        }
+        if nunique <= 2 or unique_ratio < 0.08:
+            low_variance_features.append(col)
+        if top_freq >= 0.85:
+            imputed_like_features.append(col)
+
+    hard_fail_cols = sorted(set(low_variance_features).intersection({"wind_speed_day", "vis", "cloud"}))
+    if hard_fail_cols:
+        raise ValueError(
+            "Training weather features are too low-variance for reliable learning: "
+            f"{hard_fail_cols}. Please provide richer observed weather values."
         )
-    out["precip"] = out["precip"].fillna(0.0).clip(lower=0.0)
 
-    if "wind_speed_day" not in out.columns:
-        out["wind_speed_day"] = 3.0 + (1 - out["weather_score"]).clip(lower=0) * 6
-    out["wind_speed_day"] = out["wind_speed_day"].fillna(out["wind_speed_day"].median()).clip(lower=0.0)
+    low_confidence_regressors = sorted(set(low_variance_features + imputed_like_features))
+    return {
+        "low_variance_features": low_variance_features,
+        "imputed_like_features": imputed_like_features,
+        "low_confidence_regressors": low_confidence_regressors,
+        "feature_stats": stats,
+    }
 
-    if "humidity" not in out.columns:
-        out["humidity"] = 60 + (1 - out["weather_score"]).clip(lower=0) * 25
-    out["humidity"] = out["humidity"].fillna(65).clip(lower=10, upper=100)
 
-    if "uv_index" not in out.columns:
-        out["uv_index"] = (out["temp_max"] - 10) / 2
-    out["uv_index"] = out["uv_index"].fillna(out["uv_index"].median()).clip(lower=0, upper=12)
+def normalize_qweather_daily_forecast(raw_rows: list[dict], cloud_fallback: float = 50.0) -> pd.DataFrame:
+    if not raw_rows:
+        raise ValueError("QWeather forecast rows are empty.")
 
-    out["is_rain"] = ((out["precip"] > 0.0) | (out["weather_score"] < 0.75)).astype(int)
-    out["is_severe_weather"] = ((out["precip"] >= 10.0) | (out["weather_score"] <= 0.35)).astype(int)
+    qweather_to_feature = {
+        "fxDate": "ds",
+        "tempMax": "temp_max",
+        "tempMin": "temp_min",
+        "precip": "precip",
+        "humidity": "humidity",
+        "pressure": "pressure",
+        "vis": "vis",
+        "cloud": "cloud",
+        "uvIndex": "uv_index",
+        "windSpeedDay": "wind_speed_day",
+        "windSpeedNight": "wind_speed_night",
+    }
+    forecast_df = pd.DataFrame(raw_rows).rename(columns=qweather_to_feature)
+    required_qweather_fields = FORECAST_CORE_COLUMNS
+    missing = [col for col in required_qweather_fields if col not in forecast_df.columns]
+    if missing:
+        raise ValueError(f"QWeather forecast missing required fields: {missing}")
+
+    out = forecast_df[[*required_qweather_fields, "cloud"]].copy() if "cloud" in forecast_df.columns else forecast_df[
+        required_qweather_fields
+    ].copy()
+    if "cloud" not in out.columns:
+        out["cloud"] = pd.NA
+    out["ds"] = pd.to_datetime(out["ds"])
+    for col in [item for item in WEATHER_FEATURE_COLUMNS]:
+        out[col] = pd.to_numeric(out[col], errors="coerce")
+    out = out.dropna(subset=required_qweather_fields).copy()
+    out = out.sort_values("ds").drop_duplicates(subset=["ds"], keep="last").reset_index(drop=True)
+    if out.empty:
+        raise ValueError("No valid QWeather rows after normalization.")
+
+    _validate_weather_ranges(out)
+    if out["cloud"].notna().any():
+        out["cloud"] = out["cloud"].fillna(float(out["cloud"].median()))
+    else:
+        out["cloud"] = float(cloud_fallback)
+
+    out["humidity"] = out["humidity"].clip(lower=0, upper=100)
+    out["uv_index"] = out["uv_index"].clip(lower=0, upper=16)
+    out["cloud"] = out["cloud"].clip(lower=0, upper=100)
+    for col in ["precip", "vis", "pressure", "wind_speed_day", "wind_speed_night"]:
+        out[col] = out[col].clip(lower=0)
     return out
-
-
-def build_future_features_from_history(
-    history_df: pd.DataFrame,
-    regressors: list[str],
-    days: int,
-) -> pd.DataFrame:
-    if days < 1:
-        raise ValueError("`days` must be >= 1")
-
-    history = history_df.copy()
-    history["dow"] = history["ds"].dt.dayofweek
-
-    start_date = history["ds"].max().normalize() + pd.Timedelta(days=1)
-    future_dates = pd.date_range(start=start_date, periods=days, freq="D")
-    future = pd.DataFrame({"ds": future_dates})
-    future["dow"] = future["ds"].dt.dayofweek
-
-    for col in regressors:
-        if col not in history.columns:
-            raise ValueError(f"Historical data missing required regressor: {col}")
-        dow_avg = history.groupby("dow")[col].mean()
-        overall_avg = float(history[col].mean())
-        future[col] = future["dow"].map(dow_avg).fillna(overall_avg)
-
-    if "is_rain" in future.columns:
-        future["is_rain"] = future["is_rain"].round().clip(lower=0, upper=1).astype(int)
-    if "is_severe_weather" in future.columns:
-        future["is_severe_weather"] = (
-            future["is_severe_weather"].round().clip(lower=0, upper=1).astype(int)
-        )
-
-    if "precip" in future.columns:
-        future["precip"] = future["precip"].clip(lower=0.0)
-    if "wind_speed_day" in future.columns:
-        future["wind_speed_day"] = future["wind_speed_day"].clip(lower=0.0)
-    if "humidity" in future.columns:
-        future["humidity"] = future["humidity"].clip(lower=10.0, upper=100.0)
-    if "uv_index" in future.columns:
-        future["uv_index"] = future["uv_index"].clip(lower=0.0, upper=12.0)
-    if "weather_score" in future.columns:
-        future["weather_score"] = future["weather_score"].clip(lower=0.2, upper=1.0)
-
-    return future.drop(columns=["dow"])

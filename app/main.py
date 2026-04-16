@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import FastAPI, HTTPException
 
 from app.config import config
+from app.qweather_client import QWeatherClient
 from app.schemas import PredictRequest, PredictResponse, TrainRequest, TrainResponse
 from app.service import TrafficModelService
 
@@ -12,6 +13,11 @@ app = FastAPI(
     version="0.1.0",
 )
 service = TrafficModelService()
+qweather_client = QWeatherClient(
+    api_key=config.qweather_api_key,
+    location=config.qweather_location,
+    base_url=config.qweather_base_url,
+)
 
 
 @app.get("/health")
@@ -40,9 +46,10 @@ def train(req: TrainRequest) -> TrainResponse:
 def predict(req: PredictRequest) -> PredictResponse:
     days = req.days or config.default_prediction_days
     try:
-        payload = service.predict_next_days(days=days)
+        qweather_rows = qweather_client.fetch_daily_forecast()
+        payload = service.predict_next_days(forecast_rows=qweather_rows, days=days)
     except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:

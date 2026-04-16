@@ -48,7 +48,7 @@ Swagger 文档：
 {
   "csv_path": "data/historical_flow.csv",
   "holdout_days": 14,
-  "max_training_days": 1095
+  "max_training_days": 1200
 }
 ```
 
@@ -56,7 +56,7 @@ Swagger 文档：
 
 - `csv_path`：历史训练 CSV 路径
 - `holdout_days`：用于 MAE/MAPE 评估的验证窗口天数
-- `max_training_days`：用于训练的最大历史窗口（最多 3 年，即 `1095`）
+- `max_training_days`：训练滚动窗口天数（范围 `60` 到 `1200`）
 
 响应包含：
 
@@ -78,7 +78,33 @@ Swagger 文档：
 说明：
 
 - 不再支持 `future_csv_path` 参数。
-- 未来特征由服务根据历史画像自动生成。
+- 服务会实时拉取 QWeather 未来 7 天天气并直接作为模型输入。
+- 启动前需设置环境变量：
+  - `QWEATHER_API_KEY`
+  - `QWEATHER_LOCATION`（QWeather 的 location ID）
+- QWeather 字段语义：
+  - `windSpeedDay` / `windSpeedNight`：单位 km/h
+  - `precip`：单位 mm
+  - `humidity`：百分比（`0-100`）
+  - `pressure`：单位 hPa
+  - `vis`：单位 km
+  - `cloud`：百分比（`0-100`），QWeather 可能返回空值
+
+### QWeather -> 模型字段映射
+
+| QWeather 字段 | 模型特征字段 |
+|---|---|
+| `fxDate` | `ds` |
+| `tempMax` | `temp_max` |
+| `tempMin` | `temp_min` |
+| `precip` | `precip` |
+| `humidity` | `humidity` |
+| `pressure` | `pressure` |
+| `vis` | `vis` |
+| `cloud` | `cloud` |
+| `uvIndex` | `uv_index` |
+| `windSpeedDay` | `wind_speed_day` |
+| `windSpeedNight` | `wind_speed_night` |
 
 返回示例：
 
@@ -87,14 +113,17 @@ Swagger 文档：
   "model_name": "multi_weather_regressors",
   "regressors": [
     "temp_max",
+    "temp_min",
     "precip",
-    "wind_speed_day",
     "humidity",
+    "pressure",
+    "vis",
+    "cloud",
     "uv_index",
-    "is_rain",
-    "is_severe_weather"
+    "wind_speed_day",
+    "wind_speed_night"
   ],
-  "generated_from": "historical_profile",
+  "generated_from": "qweather_7d",
   "predictions": [
     {
       "ds": "2026-03-07",
@@ -113,15 +142,27 @@ Swagger 文档：
 - `ds`
 - `y`
 - `temp_max`
-- `weather_score`
-
-可选字段（建议提供以提升多回归模型效果）：
-
+- `temp_min`
 - `precip`
-- `wind_speed_day`
 - `humidity`
+- `pressure`
+- `vis`
+- `cloud`
 - `uv_index`
-- `is_rain`
-- `is_severe_weather`
+- `wind_speed_day`
+- `wind_speed_night`
 
-如果可选天气字段缺失，服务会基于已有字段自动补全与增强。
+兼容说明：
+
+- 为兼容存量数据，若 CSV 含 `weather_score` 且缺少新字段，服务会在迁移期按规则补齐。
+
+## 5. 数据质量门禁与回退策略
+
+- 预测侧会强校验核心字段（`fxDate`、温度、降水、湿度、气压、能见度、UV、昼夜风速）。
+- `cloud` 允许为空；为空时会使用预测窗口中位数（若全空则用中性值 `50`）再做裁剪。
+- 训练前会执行数据质量门禁：
+  - 按 QWeather 单位做范围校验
+  - 低方差特征检测
+  - 疑似插补主导检测（单值占比过高）
+- 若关键特征（`wind_speed_day`、`vis`、`cloud`）方差过低，将直接报错阻止训练。
+- 对低置信度回归特征，Prophet 会自动降低 prior scale，减少对合成代理特征的过拟合风险。

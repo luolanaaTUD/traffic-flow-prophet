@@ -92,19 +92,42 @@ Swagger 文档：
 
 ### QWeather -> 模型字段映射
 
-| QWeather 字段 | 模型特征字段 |
-|---|---|
-| `fxDate` | `ds` |
-| `tempMax` | `temp_max` |
-| `tempMin` | `temp_min` |
-| `precip` | `precip` |
-| `humidity` | `humidity` |
-| `pressure` | `pressure` |
-| `vis` | `vis` |
-| `cloud` | `cloud` |
-| `uvIndex` | `uv_index` |
-| `windSpeedDay` | `wind_speed_day` |
-| `windSpeedNight` | `wind_speed_night` |
+| QWeather 字段 | 模型特征字段 | 说明 |
+|---|---|---|
+| `fxDate` | `ds` | |
+| `tempMax` | `temp_max` | |
+| `tempMin` | `temp_min` | |
+| `precip` | `precip` | |
+| `humidity` | `humidity` | |
+| `pressure` | `pressure` | |
+| `vis` | `vis` | |
+| `cloud` | `cloud` | |
+| `uvIndex` | `uv_index` | |
+| `windSpeedDay` | `wind_speed_day` | 原始值；同时派生下方两个特征 |
+| `windSpeedNight` | `wind_speed_night` | |
+| _(派生)_ | `is_windy_day` | `wind_speed_day ≥ 12 km/h`（蒲福 3 级 / 微风起点）时为 1，否则为 0 |
+| _(派生)_ | `wind_level` | 标准蒲福风级整数（0–12），按官方 km/h 边界分箱 |
+
+> **风速派生特征说明**：QWeather 返回的 `windSpeedDay` 在本地区历史数据中分布范围较窄，直接使用原始值方差不足。系统会在训练和预测时自动派生两个特征：
+>
+> - `is_windy_day`：固定阈值 **12 km/h**（蒲福 3 级微风起点，旌旗展开，游客明显感受到风力），训练与推理使用完全相同的逻辑保持一致。若观测期所有风速均低于阈值（持续静风），则该特征全为 0，模型会自动将其降为低置信度特征（prior scale 降至 0.05）。
+> - `wind_level`：采用蒲福风级官方 km/h 边界（见下表），输出 0–12 整数等级。
+>
+> | 蒲福级 | 中文术语 | 英文 | km/h 范围 |
+> |:---:|---|---|---|
+> | 0 | 无风 | Calm | < 2 |
+> | 1 | 软风 | Light air | 2–5 |
+> | 2 | 轻风 | Light breeze | 6–11 |
+> | 3 | 微风 | Gentle breeze | 12–19 |
+> | 4 | 和风 | Moderate breeze | 20–28 |
+> | 5 | 清风 | Fresh breeze | 29–38 |
+> | 6 | 强风 | Strong breeze | 39–49 |
+> | 7 | 疾风 | Near gale | 50–61 |
+> | 8 | 大风 | Gale | 62–74 |
+> | 9 | 烈风 | Strong gale | 75–88 |
+> | 10 | 狂风 | Storm | 89–102 |
+> | 11 | 暴风 | Violent storm | 103–117 |
+> | 12 | 飓风 | Hurricane | ≥ 118 |
 
 返回示例：
 
@@ -121,7 +144,8 @@ Swagger 文档：
     "cloud",
     "uv_index",
     "wind_speed_day",
-    "wind_speed_night"
+    "wind_speed_night",
+    "is_windy_day"
   ],
   "generated_from": "qweather_7d",
   "predictions": [
@@ -162,7 +186,10 @@ Swagger 文档：
 - `cloud` 允许为空；为空时会使用预测窗口中位数（若全空则用中性值 `50`）再做裁剪。
 - 训练前会执行数据质量门禁：
   - 按 QWeather 单位做范围校验
-  - 低方差特征检测
+  - 低方差特征检测（含 `is_windy_day`、`wind_level` 派生特征）
   - 疑似插补主导检测（单值占比过高）
-- 若关键特征（`wind_speed_day`、`vis`、`cloud`）方差过低，将直接报错阻止训练。
-- 对低置信度回归特征，Prophet 会自动降低 prior scale，减少对合成代理特征的过拟合风险。
+- 硬失败规则（会阻止训练）：
+  - `vis`（能见度）或 `cloud`（云量）方差过低时直接报错。
+  - `wind_speed_day` 方差过低时**有条件放行**：只要蒲福风级派生特征（`wind_level`）已成功生成，即视为拥有有效风力上下文，训练不会硬失败。原因：持续低风速本身是合法的气象状态（例如静风期），并非数据缺失；模型会通过低置信度路径自动对平坦风速特征降权。
+- 对低置信度回归特征（方差过低或单值占比高的特征），Prophet 会自动降低 prior scale（从正常值降至 0.05），减少过拟合风险。
+- `is_windy_day` 作为故意设计的二值特征（0/1），不参与低方差判定，但如果正样本比例过高（>85%），也会被降权为低置信度特征。

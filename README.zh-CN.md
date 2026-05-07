@@ -92,19 +92,23 @@ Swagger 文档：
 
 ### QWeather -> 模型字段映射
 
-| QWeather 字段 | 模型特征字段 |
-|---|---|
-| `fxDate` | `ds` |
-| `tempMax` | `temp_max` |
-| `tempMin` | `temp_min` |
-| `precip` | `precip` |
-| `humidity` | `humidity` |
-| `pressure` | `pressure` |
-| `vis` | `vis` |
-| `cloud` | `cloud` |
-| `uvIndex` | `uv_index` |
-| `windSpeedDay` | `wind_speed_day` |
-| `windSpeedNight` | `wind_speed_night` |
+| QWeather 字段 | 模型特征字段 | 说明 |
+|---|---|---|
+| `fxDate` | `ds` | |
+| `tempMax` | `temp_max` | |
+| `tempMin` | `temp_min` | |
+| `precip` | `precip` | |
+| `humidity` | `humidity` | |
+| `pressure` | `pressure` | |
+| `vis` | `vis` | |
+| `cloud` | `cloud` | |
+| `uvIndex` | `uv_index` | |
+| `windSpeedDay` | `wind_speed_day` | 原始值；同时派生下方两个特征 |
+| `windSpeedNight` | `wind_speed_night` | |
+| _(派生)_ | `is_windy_day` | `wind_speed_day > 9.5 km/h` 时为 1，否则为 0 |
+| _(派生)_ | `wind_level` | Beaufort 近似等级：0=静风(<5.5)，1=轻风(5.5–11.5)，2=微风(11.5–19.5)，3=和风(19.5–28.5)，4=大风(≥28.5) |
+
+> **风速派生特征说明**：QWeather 返回的 `windSpeedDay` 在本地区历史数据中分布范围较窄（常见值仅 2–3 个量级），直接使用原始值作为回归特征方差不足。系统会在训练和预测时自动从原始风速派生 `is_windy_day`（固定阈值 9.5 km/h，对应 QWeather 风力 2–3 级分界）和 `wind_level`（Beaufort 等级分箱）。阈值固定可确保训练与推理的派生逻辑完全一致。
 
 返回示例：
 
@@ -121,7 +125,8 @@ Swagger 文档：
     "cloud",
     "uv_index",
     "wind_speed_day",
-    "wind_speed_night"
+    "wind_speed_night",
+    "is_windy_day"
   ],
   "generated_from": "qweather_7d",
   "predictions": [
@@ -162,7 +167,10 @@ Swagger 文档：
 - `cloud` 允许为空；为空时会使用预测窗口中位数（若全空则用中性值 `50`）再做裁剪。
 - 训练前会执行数据质量门禁：
   - 按 QWeather 单位做范围校验
-  - 低方差特征检测
+  - 低方差特征检测（含 `is_windy_day`、`wind_level` 派生特征）
   - 疑似插补主导检测（单值占比过高）
-- 若关键特征（`wind_speed_day`、`vis`、`cloud`）方差过低，将直接报错阻止训练。
-- 对低置信度回归特征，Prophet 会自动降低 prior scale，减少对合成代理特征的过拟合风险。
+- 硬失败规则（会阻止训练）：
+  - `vis`（能见度）或 `cloud`（云量）方差过低时直接报错。
+  - `wind_speed_day` 方差过低时**有条件放行**：若派生特征 `is_windy_day` 存在且有正样本（即有至少 1 天风速超过 9.5 km/h），则不硬失败。原因：QWeather 在本地区返回的风速精度有限，数值常集中于 2–3 个量级，但派生的二值特征仍能保留对游客行为有影响的风力信号。
+- 对低置信度回归特征（方差过低或单值占比高的特征），Prophet 会自动降低 prior scale（从正常值降至 0.05），减少过拟合风险。
+- `is_windy_day` 作为故意设计的二值特征（0/1），不参与低方差判定，但如果正样本比例过高（>85%），也会被降权为低置信度特征。

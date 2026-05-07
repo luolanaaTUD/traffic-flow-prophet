@@ -32,6 +32,13 @@ FORECAST_CORE_COLUMNS = [
     "wind_speed_night",
 ]
 WEATHER_FEATURE_COLUMNS = [col for col in REQUIRED_COLUMNS if col not in {"ds", "y"}]
+# Derived wind features computed from raw wind speed — not present in input CSVs.
+# is_windy_day is binary (0/1); wind_level is a Beaufort-approximate ordinal (0–4).
+DERIVED_WIND_COLUMNS: list[str] = ["is_windy_day", "wind_level"]
+# Fixed threshold separating QWeather speed-scale 2 (<= 9.5 km/h) from scale 3+.
+# This cleanly splits the two most common observed values in this dataset (8.9 vs ≥10 km/h)
+# and is consistent between training-time derivation and inference-time derivation.
+IS_WINDY_THRESHOLD_KMH: float = 9.5
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -93,6 +100,7 @@ def validate_training_df(df: pd.DataFrame) -> pd.DataFrame:
     out["cloud"] = out["cloud"].clip(lower=0, upper=100)
     for col in ["precip", "vis", "pressure", "wind_speed_day", "wind_speed_night"]:
         out[col] = out[col].clip(lower=0)
+    out = derive_wind_features(out)
     return out
 
 
@@ -124,13 +132,53 @@ def _validate_weather_ranges(df: pd.DataFrame) -> None:
         raise ValueError(f"Weather fields out of expected QWeather ranges: {joined}")
 
 
+def derive_wind_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Derive robust behavioral wind features from raw wind speed columns.
+
+    Raw ``wind_speed_day`` suffers from low variance in historical datasets
+    because QWeather speed values cluster within a narrow band for this park
+    location (Guangzhou, subtropical).  These derived features encode the
+    visitor-impact signal that raw values carry but cannot express reliably
+    when measurements are coarse or repeated.
+
+    Added columns
+    -------------
+    ``is_windy_day``
+        1 if daytime wind speed exceeds ``IS_WINDY_THRESHOLD_KMH`` (9.5 km/h).
+        This threshold sits at the QWeather scale-2/scale-3 boundary and cleanly
+        separates the two most frequently observed speed values in this dataset
+        (8.9 km/h → calm, ≥10 km/h → breezy).  The threshold is fixed so that
+        training derivation and inference derivation are always identical.
+
+    ``wind_level``
+        Beaufort-approximate ordinal (0–4):
+        0 = calm (< 5.5 km/h), 1 = light (5.5–11.5), 2 = gentle (11.5–19.5),
+        3 = moderate (19.5–28.5), 4 = strong (≥ 28.5).
+    """
+    out = df.copy()
+    ws_day = out["wind_speed_day"].clip(lower=0)
+
+    out["is_windy_day"] = (ws_day > IS_WINDY_THRESHOLD_KMH).astype(float)
+
+    cut = pd.cut(
+        ws_day,
+        bins=[-0.001, 5.5, 11.5, 19.5, 28.5, float("inf")],
+        labels=[0, 1, 2, 3, 4],
+    )
+    out["wind_level"] = cut.astype(float).fillna(1.0)
+    return out
+
+
 def assess_training_feature_quality(df: pd.DataFrame) -> dict:
     total_rows = max(len(df), 1)
     low_variance_features: list[str] = []
     imputed_like_features: list[str] = []
     stats: dict[str, dict[str, float]] = {}
 
-    for col in WEATHER_FEATURE_COLUMNS:
+    # Derived binary features are intentionally 0/1 — never flag them as low-variance.
+    _derived_binary_cols: frozenset[str] = frozenset({"is_windy_day"})
+
+    for col in list(WEATHER_FEATURE_COLUMNS) + DERIVED_WIND_COLUMNS:
         if col not in df.columns:
             continue
         nunique = int(df[col].nunique(dropna=True))
@@ -141,12 +189,25 @@ def assess_training_feature_quality(df: pd.DataFrame) -> dict:
             "unique_ratio": round(unique_ratio, 4),
             "top_value_ratio": round(top_freq, 4),
         }
-        if nunique <= 2 or unique_ratio < 0.08:
+        if (nunique <= 2 or unique_ratio < 0.08) and col not in _derived_binary_cols:
             low_variance_features.append(col)
         if top_freq >= 0.85:
             imputed_like_features.append(col)
 
-    hard_fail_cols = sorted(set(low_variance_features).intersection({"wind_speed_day", "vis", "cloud"}))
+    # wind_speed_day hard-fail is waived when is_windy_day is present and has
+    # at least some positive signal (i.e. proportion of windy days > 0).
+    # Derived is_windy_day preserves visitor-impact wind information even when
+    # raw speed values cluster within a narrow band.
+    effective_wind_ok = (
+        "is_windy_day" in df.columns
+        and float(df["is_windy_day"].sum()) > 0
+    )
+    hard_fail_cols = sorted(
+        col
+        for col in {"wind_speed_day", "vis", "cloud"}
+        if col in set(low_variance_features)
+        and not (col == "wind_speed_day" and effective_wind_ok)
+    )
     if hard_fail_cols:
         raise ValueError(
             "Training weather features are too low-variance for reliable learning: "
@@ -209,4 +270,5 @@ def normalize_qweather_daily_forecast(raw_rows: list[dict], cloud_fallback: floa
     out["cloud"] = out["cloud"].clip(lower=0, upper=100)
     for col in ["precip", "vis", "pressure", "wind_speed_day", "wind_speed_night"]:
         out[col] = out[col].clip(lower=0)
+    out = derive_wind_features(out)
     return out

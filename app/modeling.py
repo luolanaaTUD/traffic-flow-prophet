@@ -16,6 +16,9 @@ MULTI_REGRESSORS = [
     "uv_index",
     "wind_speed_day",
     "wind_speed_night",
+    # Derived behavioral wind flag — binary (0/1), consistent between training
+    # and inference because it uses a fixed absolute threshold (9.5 km/h).
+    "is_windy_day",
 ]
 
 
@@ -42,6 +45,10 @@ def build_prophet_model(regressors: list[str], low_confidence_regressors: set[st
             prior_scale = 0.2
         elif col in {"precip", "wind_speed_day", "wind_speed_night"}:
             prior_scale = 0.15
+        elif col == "is_windy_day":
+            # Binary derived flag: conservative prior to avoid overfitting the
+            # sparse positive-class (windy days are a minority in training data).
+            prior_scale = 0.1
         else:
             prior_scale = 0.1
         if col in low_confidence_regressors:

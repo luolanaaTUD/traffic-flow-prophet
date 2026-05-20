@@ -4,7 +4,7 @@
 
 本后端服务从 Notebook 工作流抽取而来，提供：
 
-- 基于历史客流 CSV 的模型训练
+- 基于 JSON 训练记录（生产环境）或历史客流 CSV（本地开发）的模型训练
 - 未来 7 天客流预测 API
 
 训练模型固定为 `multi_weather_regressors`（不再做 baseline 切换）。
@@ -22,10 +22,10 @@ Swagger 文档：
 
 ## 2. 项目路径约定
 
-- 训练数据目录：`data/`（与 `app/` 同级）
-- 默认训练文件：`data/historical_flow.csv`
+- 训练数据目录：`data/`（与 `app/` 同级，仅本地开发）
+- 默认训练文件：`data/historical_flow_from_summary.csv`
 
-对于相对路径（例如 `data/historical_flow.csv`），API 会按项目根目录解析。
+对于相对路径（例如 `data/historical_flow_from_summary.csv`），API 会按项目根目录解析。
 
 ## 3. API
 
@@ -42,21 +42,65 @@ Swagger 文档：
 
 ### `POST /train`
 
-请求体：
+生产环境训练接口，由调度后端传入 JSON 训练记录。
 
 ```json
 {
-  "csv_path": "data/historical_flow.csv",
+  "records": [
+    {
+      "ds": "2026-02-15",
+      "y": 4178,
+      "temp_max": 28.0,
+      "temp_min": 18.0,
+      "precip": 0.07,
+      "humidity": 68.0,
+      "pressure": 1017.0,
+      "vis": 25.0,
+      "cloud": 68.0,
+      "uv_index": 5.0,
+      "wind_speed_day": 10.7,
+      "wind_speed_night": 9.4
+    }
+  ],
   "holdout_days": 14,
-  "max_training_days": 1200
+  "max_training_days": 60
 }
 ```
 
 字段说明：
 
-- `csv_path`：历史训练 CSV 路径
+- `records`：非空按日训练行数组（蛇形字段名，日期格式 `YYYY-MM-DD`）。勿传派生字段 `is_windy_day`、`wind_level`，由服务自动计算。
 - `holdout_days`：用于 MAE/MAPE 评估的验证窗口天数
 - `max_training_days`：训练滚动窗口天数（范围 `60` 到 `1200`）
+
+错误码：
+
+- `422`：`records` 缺失或为空
+- `400`：校验或质量门禁失败
+
+### `POST /train/from-csv`
+
+本地开发训练接口，从磁盘 CSV 文件加载数据。
+
+```json
+{
+  "csv_path": "data/historical_flow_from_summary.csv",
+  "holdout_days": 14,
+  "max_training_days": 60
+}
+```
+
+字段说明：
+
+- `csv_path`：历史训练 CSV 路径（相对路径按项目根目录解析）
+- `holdout_days`、`max_training_days`：与 `POST /train` 相同
+
+错误码：
+
+- `404`：`csv_path` 文件不存在
+- `400`：校验或质量门禁失败
+
+两个训练接口返回相同响应结构：
 
 响应包含：
 
@@ -159,9 +203,21 @@ Swagger 文档：
 }
 ```
 
-## 4. 训练 CSV 字段要求
+## 4. 调度方集成说明
 
-必填字段：
+建议由外部调度后端按日执行：
+
+1. 从数仓/API 查询最近 N 天客流与天气。
+2. 映射为下方训练字段（蛇形命名）。
+3. `POST /train` 传入 `records`。
+4. `POST /predict/next-7-days`（模型在进程内存中，需先训练再预测）。
+5. 将预测结果写入业务库。
+
+模型仅存于进程内存；进程重启后需重新调用 `/train`，再调用 `/predict`。
+
+## 5. 训练数据字段要求
+
+必填字段（CSV 表头或 JSON 字段名）：
 
 - `ds`
 - `y`
@@ -180,7 +236,7 @@ Swagger 文档：
 
 - 为兼容存量数据，若 CSV 含 `weather_score` 且缺少新字段，服务会在迁移期按规则补齐。
 
-## 5. 数据质量门禁与回退策略
+## 6. 数据质量门禁与回退策略
 
 - 预测侧会强校验核心字段（`fxDate`、温度、降水、湿度、气压、能见度、UV、昼夜风速）。
 - `cloud` 允许为空；为空时会使用预测窗口中位数（若全空则用中性值 `50`）再做裁剪。

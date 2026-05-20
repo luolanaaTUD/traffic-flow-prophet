@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ModelMetric(BaseModel):
@@ -14,7 +14,32 @@ class ModelMetric(BaseModel):
     status: str
 
 
+class TrainingRecord(BaseModel):
+    ds: date
+    y: float
+    temp_max: float
+    temp_min: float
+    precip: float
+    humidity: float
+    pressure: float
+    vis: float
+    cloud: float
+    uv_index: float
+    wind_speed_day: float
+    wind_speed_night: float
+
+
 class TrainRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    records: list[TrainingRecord] = Field(min_length=1)
+    holdout_days: int = Field(default=14, ge=7, le=365)
+    max_training_days: int = Field(default=60, ge=60, le=1200)
+
+
+class TrainFromCsvRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     csv_path: str = Field(default="data/historical_flow_from_summary.csv")
     holdout_days: int = Field(default=14, ge=7, le=365)
     max_training_days: int = Field(default=60, ge=60, le=1200)

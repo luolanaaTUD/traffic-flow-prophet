@@ -64,6 +64,12 @@ def load_training_csv(csv_path: str) -> pd.DataFrame:
     return pd.read_csv(path)
 
 
+def records_to_dataframe(records: list[dict]) -> pd.DataFrame:
+    if not records:
+        raise ValueError("Training records must not be empty.")
+    return pd.DataFrame(records)
+
+
 def validate_training_df(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
 

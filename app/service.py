@@ -11,6 +11,7 @@ from app.data_processing import (
     assess_training_feature_quality,
     load_training_csv,
     normalize_qweather_daily_forecast,
+    records_to_dataframe,
     validate_training_df,
 )
 from app.modeling import EvaluationResult, train_multi_model
@@ -42,6 +43,31 @@ class TrafficModelService:
         max_training_days: int = 60,
     ) -> dict:
         raw_df = load_training_csv(csv_path)
+        return self.train_from_dataframe(
+            raw_df,
+            holdout_days=holdout_days,
+            max_training_days=max_training_days,
+        )
+
+    def train_from_records(
+        self,
+        records: list[dict],
+        holdout_days: int = 14,
+        max_training_days: int = 60,
+    ) -> dict:
+        raw_df = records_to_dataframe(records)
+        return self.train_from_dataframe(
+            raw_df,
+            holdout_days=holdout_days,
+            max_training_days=max_training_days,
+        )
+
+    def train_from_dataframe(
+        self,
+        raw_df: pd.DataFrame,
+        holdout_days: int = 14,
+        max_training_days: int = 60,
+    ) -> dict:
         train_df = validate_training_df(raw_df)
         quality_report = assess_training_feature_quality(train_df)
         if max_training_days > 0:

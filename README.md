@@ -4,7 +4,7 @@ Chinese version: [README.zh-CN.md](README.zh-CN.md)
 
 This backend is extracted from the notebook workflow and provides:
 
-- model training from historical traffic CSV
+- model training from JSON records (production) or historical traffic CSV (local dev)
 - next-7-days traffic prediction API
 
 The training model is fixed to `multi_weather_regressors` (no baseline switch).
@@ -22,10 +22,10 @@ Swagger docs:
 
 ## 2. Project Paths
 
-- Training data folder: `data/` (same level as `app/`)
-- Default training CSV: `data/historical_flow.csv`
+- Training data folder: `data/` (same level as `app/`, local dev only)
+- Default training CSV: `data/historical_flow_from_summary.csv`
 
-For relative paths (for example `data/historical_flow.csv`), the API resolves paths against project root.
+For relative paths (for example `data/historical_flow_from_summary.csv`), the API resolves paths against project root.
 
 ## 3. API
 
@@ -42,21 +42,65 @@ Response example:
 
 ### `POST /train`
 
-Request body:
+Production training from JSON records (used by the orchestrator backend).
 
 ```json
 {
-  "csv_path": "data/historical_flow.csv",
+  "records": [
+    {
+      "ds": "2026-02-15",
+      "y": 4178,
+      "temp_max": 28.0,
+      "temp_min": 18.0,
+      "precip": 0.07,
+      "humidity": 68.0,
+      "pressure": 1017.0,
+      "vis": 25.0,
+      "cloud": 68.0,
+      "uv_index": 5.0,
+      "wind_speed_day": 10.7,
+      "wind_speed_night": 9.4
+    }
+  ],
   "holdout_days": 14,
-  "max_training_days": 1200
+  "max_training_days": 60
 }
 ```
 
 Field notes:
 
-- `csv_path`: historical training CSV path
+- `records`: non-empty array of daily training rows (snake_case fields, date `YYYY-MM-DD`). Do not send derived fields `is_windy_day` or `wind_level`; the service computes them.
 - `holdout_days`: validation window for MAE/MAPE evaluation
 - `max_training_days`: rolling history window for training (`60` to `1200`)
+
+Errors:
+
+- `422` if `records` is missing or empty
+- `400` if validation or quality gates fail
+
+### `POST /train/from-csv`
+
+Local dev training from a CSV file on disk.
+
+```json
+{
+  "csv_path": "data/historical_flow_from_summary.csv",
+  "holdout_days": 14,
+  "max_training_days": 60
+}
+```
+
+Field notes:
+
+- `csv_path`: historical training CSV path (relative paths resolve against project root)
+- `holdout_days`, `max_training_days`: same as `POST /train`
+
+Errors:
+
+- `404` if `csv_path` file does not exist
+- `400` if validation or quality gates fail
+
+Both training endpoints return the same response shape:
 
 Response includes:
 
@@ -135,9 +179,21 @@ Response example:
 }
 ```
 
-## 4. Training CSV Schema
+## 4. Orchestrator integration
 
-Required columns:
+Recommended daily flow for an external scheduler backend:
+
+1. Query the latest N days of traffic + weather from your data warehouse/API.
+2. Map columns to the training schema below (snake_case).
+3. `POST /train` with `records`.
+4. `POST /predict/next-7-days` (model is in-memory per process; train must run first in the same instance or before predict).
+5. Persist prediction results in your system.
+
+The trained model is held in process memory only; restart the service or call `/train` again before `/predict` if the process was recycled.
+
+## 5. Training data schema
+
+Required columns (CSV header or JSON field names):
 
 - `ds`
 - `y`
@@ -156,7 +212,7 @@ Legacy compatibility:
 
 - Existing datasets with `weather_score` are still accepted during migration, and missing new fields are backfilled with deterministic defaults.
 
-## 5. Data Quality Gates and Fallbacks
+## 6. Data Quality Gates and Fallbacks
 
 - Forecast ingest enforces core fields (`fxDate`, temp, precip, humidity, pressure, vis, uv, day/night wind).
 - `cloud` is treated as nullable; missing values are filled by forecast median (or neutral `50`) before clipping.

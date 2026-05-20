@@ -40,7 +40,7 @@ class TrafficModelService:
         self,
         csv_path: str,
         holdout_days: int = 14,
-        max_training_days: int = 60,
+        max_training_days: int = 120,
     ) -> dict:
         raw_df = load_training_csv(csv_path)
         return self.train_from_dataframe(
@@ -53,7 +53,7 @@ class TrafficModelService:
         self,
         records: list[dict],
         holdout_days: int = 14,
-        max_training_days: int = 60,
+        max_training_days: int = 120,
     ) -> dict:
         raw_df = records_to_dataframe(records)
         return self.train_from_dataframe(
@@ -66,7 +66,7 @@ class TrafficModelService:
         self,
         raw_df: pd.DataFrame,
         holdout_days: int = 14,
-        max_training_days: int = 60,
+        max_training_days: int = 120,
     ) -> dict:
         train_df = validate_training_df(raw_df)
         quality_report = assess_training_feature_quality(train_df)

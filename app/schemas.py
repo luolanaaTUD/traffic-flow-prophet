@@ -34,7 +34,7 @@ class TrainRequest(BaseModel):
 
     records: list[TrainingRecord] = Field(min_length=1)
     holdout_days: int = Field(default=14, ge=7, le=365)
-    max_training_days: int = Field(default=60, ge=60, le=1200)
+    max_training_days: int = Field(default=120, ge=60, le=720)
 
 
 class TrainFromCsvRequest(BaseModel):
@@ -42,7 +42,7 @@ class TrainFromCsvRequest(BaseModel):
 
     csv_path: str = Field(default="data/historical_flow_from_summary.csv")
     holdout_days: int = Field(default=14, ge=7, le=365)
-    max_training_days: int = Field(default=60, ge=60, le=1200)
+    max_training_days: int = Field(default=120, ge=60, le=720)
 
 
 class TrainResponse(BaseModel):

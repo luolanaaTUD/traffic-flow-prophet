@@ -63,7 +63,7 @@ Swagger 文档：
     }
   ],
   "holdout_days": 14,
-  "max_training_days": 60
+  "max_training_days": 120
 }
 ```
 
@@ -71,7 +71,7 @@ Swagger 文档：
 
 - `records`：非空按日训练行数组（蛇形字段名，日期格式 `YYYY-MM-DD`）。勿传派生字段 `is_windy_day`、`wind_level`，由服务自动计算。
 - `holdout_days`：用于 MAE/MAPE 评估的验证窗口天数
-- `max_training_days`：训练滚动窗口天数（范围 `60` 到 `1200`）
+- `max_training_days`：训练滚动窗口天数（范围 `60` 到 `720`，默认 `120`）
 
 错误码：
 
@@ -86,7 +86,7 @@ Swagger 文档：
 {
   "csv_path": "data/historical_flow_from_summary.csv",
   "holdout_days": 14,
-  "max_training_days": 60
+  "max_training_days": 120
 }
 ```
 

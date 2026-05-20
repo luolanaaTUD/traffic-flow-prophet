@@ -63,7 +63,7 @@ Production training from JSON records (used by the orchestrator backend).
     }
   ],
   "holdout_days": 14,
-  "max_training_days": 60
+  "max_training_days": 120
 }
 ```
 
@@ -71,7 +71,7 @@ Field notes:
 
 - `records`: non-empty array of daily training rows (snake_case fields, date `YYYY-MM-DD`). Do not send derived fields `is_windy_day` or `wind_level`; the service computes them.
 - `holdout_days`: validation window for MAE/MAPE evaluation
-- `max_training_days`: rolling history window for training (`60` to `1200`)
+- `max_training_days`: rolling history window for training (`60` to `720`, default `120`)
 
 Errors:
 
@@ -86,7 +86,7 @@ Local dev training from a CSV file on disk.
 {
   "csv_path": "data/historical_flow_from_summary.csv",
   "holdout_days": 14,
-  "max_training_days": 60
+  "max_training_days": 120
 }
 ```
 

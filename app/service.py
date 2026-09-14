@@ -3,9 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from threading import Lock
+from typing import Any
 
 import pandas as pd
-from prophet import Prophet
 
 from app.data_processing import (
     assess_training_feature_quality,
@@ -19,12 +19,13 @@ from app.modeling import EvaluationResult, train_multi_model
 
 @dataclass
 class ModelArtifacts:
-    model: Prophet
+    model: Any  # Prophet or TimesFM model
     model_name: str
     regressors: list[str]
     train_df: pd.DataFrame
     metrics: list[EvaluationResult]
     trained_at: datetime
+    backend: str  # 'prophet' or 'timesfm'
 
 
 class TrafficModelService:
@@ -41,12 +42,14 @@ class TrafficModelService:
         csv_path: str,
         holdout_days: int = 14,
         max_training_days: int = 120,
+        model_name: str = "timesfm_weather_holiday",
     ) -> dict:
         raw_df = load_training_csv(csv_path)
         return self.train_from_dataframe(
             raw_df,
             holdout_days=holdout_days,
             max_training_days=max_training_days,
+            model_name=model_name,
         )
 
     def train_from_records(
@@ -54,12 +57,14 @@ class TrafficModelService:
         records: list[dict],
         holdout_days: int = 14,
         max_training_days: int = 120,
+        model_name: str = "timesfm_weather_holiday",
     ) -> dict:
         raw_df = records_to_dataframe(records)
         return self.train_from_dataframe(
             raw_df,
             holdout_days=holdout_days,
             max_training_days=max_training_days,
+            model_name=model_name,
         )
 
     def train_from_dataframe(
@@ -67,7 +72,15 @@ class TrafficModelService:
         raw_df: pd.DataFrame,
         holdout_days: int = 14,
         max_training_days: int = 120,
+        model_name: str = "timesfm_weather_holiday",
     ) -> dict:
+        # Validate model_name
+        valid_models = {"multi_weather_regressors", "timesfm_weather_holiday"}
+        if model_name not in valid_models:
+            raise ValueError(
+                f"Invalid model_name '{model_name}'. Must be one of: {valid_models}"
+            )
+        
         train_df = validate_training_df(raw_df)
         quality_report = assess_training_feature_quality(train_df)
         if max_training_days > 0:
@@ -77,26 +90,39 @@ class TrafficModelService:
             if train_df.empty:
                 raise ValueError("No rows left after applying max_training_days window.")
 
-        model, model_name, regressors, metrics = train_multi_model(
-            df=train_df,
-            holdout_days=holdout_days,
-            low_confidence_regressors=set(quality_report["low_confidence_regressors"]),
-        )
+        # Select backend based on model_name
+        if model_name == "timesfm_weather_holiday":
+            backend = "timesfm"
+            from app.modeling_timesfm import train_timesfm_model
+            
+            model, returned_model_name, regressors, metrics = train_timesfm_model(
+                df=train_df,
+                holdout_days=holdout_days,
+                low_confidence_regressors=set(quality_report["low_confidence_regressors"]),
+            )
+        else:
+            backend = "prophet"
+            model, returned_model_name, regressors, metrics = train_multi_model(
+                df=train_df,
+                holdout_days=holdout_days,
+                low_confidence_regressors=set(quality_report["low_confidence_regressors"]),
+            )
 
         artifacts = ModelArtifacts(
             model=model,
-            model_name=model_name,
+            model_name=returned_model_name,
             regressors=regressors,
             train_df=train_df,
             metrics=metrics,
             trained_at=datetime.now(UTC),
+            backend=backend,
         )
 
         with self._lock:
             self._artifacts = artifacts
 
         return {
-            "model_name": model_name,
+            "model_name": returned_model_name,
             "regressors": regressors,
             "rows": int(len(train_df)),
             "start_date": train_df["ds"].min().date(),
@@ -133,12 +159,25 @@ class TrafficModelService:
         if missing_cols:
             raise ValueError(f"Future features missing required columns: {missing_cols}")
 
-        future_for_model = future_df[["ds"] + artifacts.regressors].copy()
-        if days:
-            future_for_model = future_for_model.head(days).copy()
+        # Generate predictions based on backend
+        if artifacts.backend == "timesfm":
+            from app.modeling_timesfm import predict_timesfm
+            
+            result = predict_timesfm(
+                model=artifacts.model,
+                future_df=future_df,
+                days=days,
+            )
+        else:
+            # Prophet backend
+            future_for_model = future_df[["ds"] + artifacts.regressors].copy()
+            if days:
+                future_for_model = future_for_model.head(days).copy()
 
-        forecast = artifacts.model.predict(future_for_model)
-        result = forecast[["ds", "yhat", "yhat_lower", "yhat_upper"]].copy()
+            forecast = artifacts.model.predict(future_for_model)
+            result = forecast[["ds", "yhat", "yhat_lower", "yhat_upper"]].copy()
+        
+        # Ensure integer output and non-negative values
         for col in ["yhat", "yhat_lower", "yhat_upper"]:
             result[col] = result[col].clip(lower=0).round().astype(int)
 

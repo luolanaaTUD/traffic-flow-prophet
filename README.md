@@ -17,13 +17,16 @@ The default training model is `timesfm_weather_holiday` (TimesFM-3). You can opt
 ### TimesFM-3 (Default, Non-Commercial)
 - Model name: `timesfm_weather_holiday` (DEFAULT)
 - Checkpoint: `google/timesfm-3.0-pytorch`
+- API: TimesFM-3.x (`timesfm3.TimesFM3Evaluator` + `ModelConfig`)
 - License: **TimesFM Non-Commercial License** (non-commercial / non-production use only)
 - Requires: `pip install -e ".[timesfm]"` or `pip install timesfm[torch] torch>=2.0.0`
 - Features:
   - Weather covariates (temp_max, temp_min, precip, humidity, pressure, vis, cloud, uv_index, wind_speed_day, wind_speed_night, is_windy_day)
   - CN holidays from Prophet's calendar (`make_holidays_df(..., country='CN')`)
   - Weekend flag
-  - Multivariate forecasting mode
+  - Multivariate forecasting mode (`univariate=False`, covariates shape `(C, T+H)`)
+  - Z-score normalization of weather features
+  - Quantile forecasts for uncertainty bands
 - Offline evaluation (~198 days) showed TimesFM with weather + holidays beating Prophet on MAE/RMSE/MAPE
 
 ### Prophet (Production-Safe Opt-In)
@@ -313,10 +316,12 @@ Since TimesFM-3 requires downloading large model weights (~2GB+), automated CI t
 ### Setup
 
 ```bash
-# Install TimesFM dependencies
+# Install TimesFM-3 dependencies
 pip install -e ".[timesfm]"
 # or: pip install timesfm[torch] torch>=2.0.0
 ```
+
+**Note**: The implementation uses the **TimesFM-3.x API** (`timesfm3.TimesFM3Evaluator` + `ModelConfig`), not the old 1.x/2.x API (`timesfm.TimesFm`). If you encounter `AttributeError: module 'timesfm' has no attribute 'TimesFm'`, ensure you have the correct version installed.
 
 ### Manual Testing
 
@@ -324,7 +329,16 @@ pip install -e ".[timesfm]"
 # Start the server
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 
-# Train with TimesFM
+# Train with TimesFM (default)
+curl -X POST http://localhost:8000/train/from-csv \
+  -H "Content-Type: application/json" \
+  -d '{
+    "csv_path": "data/historical_flow_from_summary.csv",
+    "holdout_days": 14,
+    "max_training_days": 120
+  }'
+
+# Or explicitly specify TimesFM
 curl -X POST http://localhost:8000/train/from-csv \
   -H "Content-Type: application/json" \
   -d '{
@@ -348,4 +362,14 @@ curl -X POST http://localhost:8000/predict/next-7-days \
 - Regressors list includes `is_holiday` and `is_weekend` (in addition to weather features)
 - Predictions return 7-day forecast with `yhat`, `yhat_lower`, `yhat_upper`
 
-**First run:** TimesFM will download checkpoint weights from HuggingFace (`google/timesfm-3.0-pytorch`). This may take several minutes depending on network speed.
+**First run:** TimesFM-3 will download checkpoint weights from HuggingFace (`google/timesfm-3.0-pytorch`). This may take several minutes depending on network speed.
+
+### TimesFM-3 API Details
+
+The implementation uses:
+- `timesfm3.ModelConfig` for model configuration
+- `timesfm3.TimesFM3Evaluator` for zero-shot forecasting
+- `predict_batch(context, past_future_covariates, horizon_len, univariate=False, return_quantiles=True)`
+- Covariate shape: `(C, T+H)` where C=features, T=context length, H=horizon
+- Z-score normalization using training statistics
+- Quantile forecasts (0.1, 0.5, 0.9) for uncertainty bands

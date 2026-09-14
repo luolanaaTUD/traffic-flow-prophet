@@ -32,14 +32,19 @@ class EvaluationResult:
 
 
 def _try_import_timesfm():
-    """Lazy import TimesFM to avoid hard dependency on torch."""
+    """Lazy import TimesFM-3 to avoid hard dependency on torch."""
     try:
-        import timesfm
-        return timesfm
-    except ImportError as exc:
-        raise ImportError(
-            "TimesFM is not installed. Install with: pip install timesfm[torch] torch>=2.0.0"
-        ) from exc
+        from timesfm3 import ModelConfig, TimesFM3Evaluator
+        return ModelConfig, TimesFM3Evaluator
+    except ImportError:
+        try:
+            # Fallback: try the alternate import path
+            import timesfm
+            return timesfm.ModelConfig, timesfm.TimesFM3Evaluator
+        except (ImportError, AttributeError) as exc:
+            raise ImportError(
+                "TimesFM-3 is not installed. Install with: pip install timesfm[torch] torch>=2.0.0"
+            ) from exc
 
 
 def _make_cn_holiday_features(ds_col: pd.Series) -> pd.DataFrame:
@@ -81,7 +86,7 @@ def _prepare_timesfm_covariates(
     include_holidays: bool = True,
 ) -> tuple[np.ndarray, list[str]]:
     """
-    Prepare covariates for TimesFM multivariate mode.
+    Prepare covariates for TimesFM-3 multivariate mode.
     
     Args:
         df: DataFrame with 'ds' column and weather regressors
@@ -89,7 +94,7 @@ def _prepare_timesfm_covariates(
         include_holidays: If True, add CN holiday + weekend features
     
     Returns:
-        (covariates_array, covariate_names) where covariates_array has shape (n_samples, n_features)
+        (covariates_array, covariate_names) where covariates_array has shape (num_features, n_samples)
     """
     covariate_cols = regressors.copy()
     cov_df = df[regressors].copy()
@@ -99,10 +104,45 @@ def _prepare_timesfm_covariates(
         cov_df = cov_df.join(holiday_features[['is_holiday', 'is_weekend']])
         covariate_cols.extend(['is_holiday', 'is_weekend'])
     
-    # Convert to numpy array: shape (n_samples, n_features)
-    covariates = cov_df.values.astype(np.float32)
+    # Convert to numpy array: shape (n_samples, n_features), then transpose to (n_features, n_samples)
+    # TimesFM-3 expects (C, T) shape for covariates
+    covariates = cov_df.values.T.astype(np.float32)
     
     return covariates, covariate_cols
+
+
+def _normalize_covariates(
+    covariates: np.ndarray,
+    train_mean: np.ndarray | None = None,
+    train_std: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Z-score normalize covariates using training statistics.
+    
+    Args:
+        covariates: Shape (C, T) or (C, T+H)
+        train_mean: Training mean per feature (C,). If None, computed from covariates.
+        train_std: Training std per feature (C,). If None, computed from covariates.
+    
+    Returns:
+        (normalized_covariates, mean, std)
+    """
+    if train_mean is None:
+        train_mean = covariates.mean(axis=1, keepdims=True)
+    else:
+        train_mean = train_mean.reshape(-1, 1)
+    
+    if train_std is None:
+        train_std = covariates.std(axis=1, keepdims=True)
+    else:
+        train_std = train_std.reshape(-1, 1)
+    
+    # Avoid division by zero
+    train_std = np.where(train_std < 1e-8, 1.0, train_std)
+    
+    normalized = (covariates - train_mean) / train_std
+    
+    return normalized, train_mean.flatten(), train_std.flatten()
 
 
 def fit_timesfm(
@@ -114,51 +154,52 @@ def fit_timesfm(
     """
     Fit TimesFM-3 model with weather covariates and CN holidays.
     
-    Note: TimesFM is a pretrained foundation model. This "fit" method 
+    Note: TimesFM-3 is a pretrained foundation model. This "fit" method 
     prepares training context and covariates for zero-shot forecasting.
     
     Args:
         df: Training DataFrame with 'ds', 'y', and weather regressors
         regressors: Weather regressor column names
-        checkpoint_path: TimesFM model checkpoint
+        checkpoint_path: TimesFM-3 model checkpoint
         low_confidence_regressors: (not used for TimesFM; kept for API compatibility)
     
     Returns:
         (model, covariate_names)
     """
-    timesfm = _try_import_timesfm()
+    ModelConfig, TimesFM3Evaluator = _try_import_timesfm()
     
     # Initialize TimesFM-3 model with proper configuration
-    model = timesfm.TimesFm(
-        context_len=512,
-        horizon_len=30,
-        input_patch_len=32,
-        output_patch_len=128,
-        num_layers=20,
-        model_dims=1280,
-        backend='gpu' if _has_cuda() else 'cpu',
+    device = "cuda" if _has_cuda() else "cpu"
+    config = ModelConfig(
+        checkpoint_path=checkpoint_path,
+        per_core_batch_size=1,
+        device=device,
     )
-    
-    # Load pretrained checkpoint from HuggingFace
-    model.load_from_checkpoint(repo_id=checkpoint_path)
+    model = TimesFM3Evaluator(config)
     
     # Prepare covariates (weather + holidays + weekend)
+    # Shape: (num_features, time_steps)
     covariates, covariate_names = _prepare_timesfm_covariates(
         df=df,
         regressors=regressors,
         include_holidays=True,
     )
     
-    # TimesFM expects time series context
-    # Shape: (batch=1, time_steps)
-    y_values = df['y'].values.astype(np.float32)
+    # Normalize covariates using training statistics
+    normalized_covariates, train_mean, train_std = _normalize_covariates(covariates)
+    
+    # TimesFM-3 expects time series context
+    # Shape: (1, time_steps) for univariate target
+    y_values = df['y'].values.astype(np.float32).reshape(1, -1)
     
     # Store training context for later prediction
-    # TimesFM is a foundation model and doesn't need explicit training
+    # TimesFM-3 is a foundation model and doesn't need explicit training
     model._training_data = {
         'y': y_values,
-        'covariates': covariates,
+        'covariates': normalized_covariates,  # (C, T)
         'covariate_names': covariate_names,
+        'train_mean': train_mean,
+        'train_std': train_std,
         'last_ds': df['ds'].iloc[-1],
         'freq': 'D',
     }
@@ -172,10 +213,10 @@ def predict_timesfm(
     days: int = 7,
 ) -> pd.DataFrame:
     """
-    Generate predictions using TimesFM foundation model.
+    Generate predictions using TimesFM-3 foundation model.
     
     Args:
-        model: TimesFM model (with _training_data attached)
+        model: TimesFM-3 model (with _training_data attached)
         future_df: Future DataFrame with 'ds' and weather regressors
         days: Number of days to predict
     
@@ -188,51 +229,74 @@ def predict_timesfm(
     # Extract weather regressors from covariate_names (exclude holiday/weekend)
     weather_regressors = [col for col in covariate_names if col not in {'is_holiday', 'is_weekend'}]
     
-    # Prepare future covariates
+    # Prepare future covariates (C, H)
     future_covariates, _ = _prepare_timesfm_covariates(
         df=future_df.head(days),
         regressors=weather_regressors,
         include_holidays=True,
     )
     
-    # Prepare input for TimesFM
-    # Context: historical traffic values
-    context = training_data['y']
-    past_covariates = training_data['covariates']
+    # Normalize future covariates using training statistics
+    future_covariates_norm = (future_covariates - training_data['train_mean'].reshape(-1, 1)) / training_data['train_std'].reshape(-1, 1)
     
-    # For multivariate forecasting, we need to provide covariates
-    # Shape requirements:
-    # - context: (batch, context_len) or can use the full available context
-    # - covariates: for both past (context) and future (horizon)
+    # Combine past and future covariates: (C, T+H)
+    past_covariates = training_data['covariates']  # (C, T)
+    combined_covariates = np.concatenate([past_covariates, future_covariates_norm], axis=1)  # (C, T+H)
     
-    # TimesFM-3 API: forecast with covariates
-    # Use the last N points that fit in context window
-    context_len = min(len(context), 512)
-    context_input = context[-context_len:]
-    past_cov_input = past_covariates[-context_len:]
+    # Context target: (1, T)
+    context_target = training_data['y']  # Already (1, T)
     
-    # Make prediction
-    # TimesFM returns point forecasts and optionally quantiles
-    forecast_result = model.forecast(
-        inputs=[context_input],  # List of time series
-        freq='D',
-        horizon=days,
-        # Note: Actual TimesFM-3 covariate API may differ
-        # This is a placeholder for the multivariate forecasting interface
-    )
+    # Make prediction with TimesFM-3 API
+    # predict_batch expects:
+    # - context: (batch_size, context_len)
+    # - past_future_covariates: (num_features, context_len + horizon_len)
+    # - horizon_len: int
+    # - univariate: False to use covariates
+    # - return_quantiles: True to get uncertainty bands
     
-    # Extract forecasts - TimesFM returns (batch, horizon) or (batch, horizon, quantiles)
-    if len(forecast_result.shape) == 3:
-        # Has quantiles: (batch, horizon, num_quantiles)
-        point_forecast = forecast_result[0, :, 1]  # median
-        lower_forecast = forecast_result[0, :, 0]  # 10th percentile
-        upper_forecast = forecast_result[0, :, 2]  # 90th percentile
-    else:
-        # Point forecast only: (batch, horizon)
-        point_forecast = forecast_result[0, :]
-        # Generate approximate uncertainty bands (±20%)
-        lower_forecast = point_forecast * 0.8
-        upper_forecast = point_forecast * 1.2
+    try:
+        forecast_result = model.predict_batch(
+            context=context_target,  # (1, T)
+            past_future_covariates=combined_covariates,  # (C, T+H)
+            horizon_len=days,
+            univariate=False,  # CRITICAL: Must be False to use covariates
+            return_quantiles=True,  # Get quantiles for uncertainty
+        )
+        
+        # forecast_result shape: (batch_size, horizon, num_quantiles)
+        # Typically quantiles are [0.1, 0.5, 0.9]
+        if isinstance(forecast_result, dict):
+            # Handle dict return format
+            if 'quantiles' in forecast_result:
+                quantiles = forecast_result['quantiles']  # (1, H, Q)
+                point_forecast = quantiles[0, :, 1]  # Median (0.5 quantile)
+                lower_forecast = quantiles[0, :, 0]  # 10th percentile
+                upper_forecast = quantiles[0, :, 2]  # 90th percentile
+            elif 'point_forecast' in forecast_result:
+                point_forecast = forecast_result['point_forecast'][0, :]  # (H,)
+                # Generate approximate uncertainty bands (±20%)
+                lower_forecast = point_forecast * 0.8
+                upper_forecast = point_forecast * 1.2
+            else:
+                raise ValueError(f"Unexpected forecast_result format: {forecast_result.keys()}")
+        else:
+            # Handle array return format
+            if len(forecast_result.shape) == 3:
+                # (batch, horizon, quantiles)
+                point_forecast = forecast_result[0, :, 1]  # Median
+                lower_forecast = forecast_result[0, :, 0]  # 10th percentile
+                upper_forecast = forecast_result[0, :, 2]  # 90th percentile
+            else:
+                # (batch, horizon) - point forecast only
+                point_forecast = forecast_result[0, :]
+                # Generate approximate uncertainty bands (±20%)
+                lower_forecast = point_forecast * 0.8
+                upper_forecast = point_forecast * 1.2
+    
+    except Exception as exc:
+        raise RuntimeError(
+            f"TimesFM-3 prediction failed. Check that covariates shape is (C, T+H) and univariate=False. Error: {exc}"
+        ) from exc
     
     # Create result DataFrame
     result = pd.DataFrame({

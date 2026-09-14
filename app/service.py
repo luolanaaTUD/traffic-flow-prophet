@@ -42,7 +42,7 @@ class TrafficModelService:
         csv_path: str,
         holdout_days: int = 14,
         max_training_days: int = 120,
-        model_name: str = "multi_weather_regressors",
+        model_name: str = "timesfm_weather_holiday",
     ) -> dict:
         raw_df = load_training_csv(csv_path)
         return self.train_from_dataframe(
@@ -57,7 +57,7 @@ class TrafficModelService:
         records: list[dict],
         holdout_days: int = 14,
         max_training_days: int = 120,
-        model_name: str = "multi_weather_regressors",
+        model_name: str = "timesfm_weather_holiday",
     ) -> dict:
         raw_df = records_to_dataframe(records)
         return self.train_from_dataframe(
@@ -72,7 +72,7 @@ class TrafficModelService:
         raw_df: pd.DataFrame,
         holdout_days: int = 14,
         max_training_days: int = 120,
-        model_name: str = "multi_weather_regressors",
+        model_name: str = "timesfm_weather_holiday",
     ) -> dict:
         # Validate model_name
         valid_models = {"multi_weather_regressors", "timesfm_weather_holiday"}

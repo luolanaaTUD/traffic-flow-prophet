@@ -53,10 +53,19 @@ def test_records_to_dataframe_matches_csv_validation() -> None:
 
 def test_train_from_records_matches_csv_row_count(service: TrafficModelService) -> None:
     records = _csv_records()
-    records_result = service.train_from_records(records=records, max_training_days=60)
+    # Explicitly use Prophet to avoid TimesFM dependency in tests
+    records_result = service.train_from_records(
+        records=records,
+        max_training_days=60,
+        model_name="multi_weather_regressors",
+    )
 
     csv_service = TrafficModelService()
-    csv_result = csv_service.train_from_csv(csv_path=DEFAULT_CSV, max_training_days=60)
+    csv_result = csv_service.train_from_csv(
+        csv_path=DEFAULT_CSV,
+        max_training_days=60,
+        model_name="multi_weather_regressors",
+    )
 
     assert records_result["rows"] == csv_result["rows"]
     assert records_result["model_name"] == csv_result["model_name"]
@@ -69,6 +78,7 @@ def test_train_api_with_records(client: TestClient) -> None:
             "records": _csv_records(),
             "holdout_days": 14,
             "max_training_days": 60,
+            "model_name": "multi_weather_regressors",  # Explicitly use Prophet
         },
     )
     assert response.status_code == 200
@@ -109,6 +119,7 @@ def test_train_from_csv_api(client: TestClient) -> None:
             "csv_path": DEFAULT_CSV,
             "holdout_days": 14,
             "max_training_days": 60,
+            "model_name": "multi_weather_regressors",  # Explicitly use Prophet
         },
     )
     assert response.status_code == 200

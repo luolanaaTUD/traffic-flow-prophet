@@ -6,13 +6,45 @@ This backend is extracted from the notebook workflow and provides:
 
 - model training from JSON records (production) or historical traffic CSV (local dev)
 - next-7-days traffic prediction API
+- **NEW**: Optional TimesFM-3 forecasting backend alongside Prophet
 
-The training model is fixed to `multi_weather_regressors` (no baseline switch).
+The default training model is `multi_weather_regressors` (Prophet). You can optionally select `timesfm_weather_holiday` (TimesFM-3) via the `model_name` parameter.
+
+## Model Selection
+
+### Prophet (Production-Safe Default)
+- Model name: `multi_weather_regressors`
+- License: MIT (production-safe)
+- Baseline model for traffic forecasting
+
+### TimesFM-3 (Experimental, Non-Commercial)
+- Model name: `timesfm_weather_holiday`
+- Checkpoint: `google/timesfm-3.0-pytorch`
+- License: **TimesFM Non-Commercial License** (non-commercial / non-production use only)
+- Requires: `pip install -e ".[timesfm]"` or `pip install timesfm[torch] torch>=2.0.0`
+- Features:
+  - Weather covariates (same as Prophet: temp_max, temp_min, precip, humidity, pressure, vis, cloud, uv_index, wind_speed_day, wind_speed_night, is_windy_day)
+  - CN holidays from Prophet's calendar (`make_holidays_df(..., country='CN')`)
+  - Weekend flag
+  - Multivariate forecasting mode
+- Offline evaluation (~198 days) showed TimesFM with weather + holidays beating Prophet on MAE/RMSE/MAPE
+
+**Important**: TimesFM-3 weights are subject to the TimesFM Non-Commercial License and **must not be used for production or commercial applications**. Prophet remains the production-safe default.
 
 ## 1. Quick Start
 
+### Base Installation (Prophet only)
+
 ```bash
 uv sync
+uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+### With TimesFM-3 (Optional)
+
+```bash
+uv sync --extra timesfm
+# or: pip install -e ".[timesfm]"
 uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
@@ -63,7 +95,8 @@ Production training from JSON records (used by the orchestrator backend).
     }
   ],
   "holdout_days": 14,
-  "max_training_days": 120
+  "max_training_days": 120,
+  "model_name": "multi_weather_regressors"
 }
 ```
 
@@ -72,11 +105,14 @@ Field notes:
 - `records`: non-empty array of daily training rows (snake_case fields, date `YYYY-MM-DD`). Do not send derived fields `is_windy_day` or `wind_level`; the service computes them.
 - `holdout_days`: validation window for MAE/MAPE evaluation
 - `max_training_days`: rolling history window for training (`60` to `720`, default `120`)
+- `model_name`: (optional, default `"multi_weather_regressors"`) Model backend to use:
+  - `"multi_weather_regressors"` — Prophet (MIT license, production-safe)
+  - `"timesfm_weather_holiday"` — TimesFM-3 (non-commercial license, experimental)
 
 Errors:
 
 - `422` if `records` is missing or empty
-- `400` if validation or quality gates fail
+- `400` if validation, quality gates, or model selection fails
 
 ### `POST /train/from-csv`
 
@@ -86,7 +122,8 @@ Local dev training from a CSV file on disk.
 {
   "csv_path": "data/historical_flow_from_summary.csv",
   "holdout_days": 14,
-  "max_training_days": 120
+  "max_training_days": 120,
+  "model_name": "multi_weather_regressors"
 }
 ```
 
@@ -94,17 +131,18 @@ Field notes:
 
 - `csv_path`: historical training CSV path (relative paths resolve against project root)
 - `holdout_days`, `max_training_days`: same as `POST /train`
+- `model_name`: (optional, default `"multi_weather_regressors"`) same as `POST /train`
 
 Errors:
 
 - `404` if `csv_path` file does not exist
-- `400` if validation or quality gates fail
+- `400` if validation, quality gates, or model selection fails
 
 Both training endpoints return the same response shape:
 
 Response includes:
 
-- selected model name (`multi_weather_regressors`)
+- selected model name (`multi_weather_regressors` or `timesfm_weather_holiday`)
 - regressors
 - training date range and row count
 - evaluation metrics
@@ -178,6 +216,8 @@ Response example:
   ]
 }
 ```
+
+**Note**: When using `timesfm_weather_holiday`, the `regressors` field in the response will additionally include `is_holiday` and `is_weekend` (TimesFM uses these as explicit features; Prophet handles holidays internally).
 
 ## 4. Orchestrator integration
 

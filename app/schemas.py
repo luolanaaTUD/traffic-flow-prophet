@@ -35,6 +35,10 @@ class TrainRequest(BaseModel):
     records: list[TrainingRecord] = Field(min_length=1)
     holdout_days: int = Field(default=14, ge=7, le=365)
     max_training_days: int = Field(default=120, ge=60, le=720)
+    model_name: str = Field(
+        default="multi_weather_regressors",
+        description="Model backend: 'multi_weather_regressors' (Prophet, production-safe default) or 'timesfm_weather_holiday' (TimesFM-3, non-commercial license)"
+    )
 
 
 class TrainFromCsvRequest(BaseModel):
@@ -43,6 +47,10 @@ class TrainFromCsvRequest(BaseModel):
     csv_path: str = Field(default="data/historical_flow_from_summary.csv")
     holdout_days: int = Field(default=14, ge=7, le=365)
     max_training_days: int = Field(default=120, ge=60, le=720)
+    model_name: str = Field(
+        default="multi_weather_regressors",
+        description="Model backend: 'multi_weather_regressors' (Prophet, production-safe default) or 'timesfm_weather_holiday' (TimesFM-3, non-commercial license)"
+    )
 
 
 class TrainResponse(BaseModel):

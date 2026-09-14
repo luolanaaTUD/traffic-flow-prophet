@@ -69,6 +69,7 @@ def train(req: TrainRequest) -> TrainResponse:
             records=[record.model_dump(mode="json") for record in req.records],
             holdout_days=req.holdout_days,
             max_training_days=req.max_training_days,
+            model_name=req.model_name,
         )
     )
 
@@ -80,6 +81,7 @@ def train_from_csv(req: TrainFromCsvRequest) -> TrainResponse:
             csv_path=req.csv_path,
             holdout_days=req.holdout_days,
             max_training_days=req.max_training_days,
+            model_name=req.model_name,
         )
     )
 

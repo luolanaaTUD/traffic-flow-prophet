@@ -262,3 +262,47 @@ Legacy compatibility:
   - imputed-like dominance detection (high top-value ratio)
 - If critical features (`wind_speed_day`, `vis`, `cloud`) are too low-variance, training fails with an explicit error.
 - For low-confidence regressors, Prophet applies lower prior scales to reduce overfitting to synthetic proxies.
+
+## 7. Testing TimesFM-3 (Optional Backend)
+
+Since TimesFM-3 requires downloading large model weights (~2GB+), automated CI tests run Prophet only. To manually test TimesFM:
+
+### Setup
+
+```bash
+# Install TimesFM dependencies
+pip install -e ".[timesfm]"
+# or: pip install timesfm[torch] torch>=2.0.0
+```
+
+### Manual Testing
+
+```bash
+# Start the server
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+# Train with TimesFM
+curl -X POST http://localhost:8000/train/from-csv \
+  -H "Content-Type: application/json" \
+  -d '{
+    "csv_path": "data/historical_flow_from_summary.csv",
+    "holdout_days": 14,
+    "max_training_days": 120,
+    "model_name": "timesfm_weather_holiday"
+  }'
+
+# Predict (ensure QWeather env vars are set)
+export QWEATHER_API_KEY="your_key"
+export QWEATHER_LOCATION="your_location_id"
+
+curl -X POST http://localhost:8000/predict/next-7-days \
+  -H "Content-Type: application/json" \
+  -d '{"days": 7}'
+```
+
+**Expected behavior:**
+- Training response includes `"model_name": "timesfm_weather_holiday"`
+- Regressors list includes `is_holiday` and `is_weekend` (in addition to weather features)
+- Predictions return 7-day forecast with `yhat`, `yhat_lower`, `yhat_upper`
+
+**First run:** TimesFM will download checkpoint weights from HuggingFace (`google/timesfm-3.0-pytorch`). This may take several minutes depending on network speed.

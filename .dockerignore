@@ -41,8 +41,10 @@ data/*.csv
 output/
 *.csv
 
-# Documentation
+# Documentation (exclude most, keep READMEs required by packaging)
 *.md
+!README.md
+!README.zh-CN.md
 docs/
 
 # Jupyter notebooks

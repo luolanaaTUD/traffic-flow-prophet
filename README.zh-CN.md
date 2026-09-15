@@ -6,11 +6,11 @@
 
 - 基于 JSON 训练记录（生产环境）或历史客流 CSV（本地开发）的模型训练
 - 未来 7 天客流预测 API
-- **TimesFM-3 作为默认预测模型**，Prophet 可选
+- **Prophet 作为默认生产模型**，TimesFM-3 可选作为非商业实验
 
-默认训练模型为 `timesfm_weather_holiday` (TimesFM-3)。可通过 `model_name` 参数选择 `multi_weather_regressors` (Prophet)。
+默认训练模型为 `multi_weather_regressors` (Prophet)。可通过 `model_name` 参数选择 `timesfm_weather_holiday` (TimesFM-3)。
 
-⚠️ **重要许可证说明**：默认的 TimesFM-3 模型受 **TimesFM 非商业许可证**约束，**禁止用于生产或商业应用**。生产环境使用时，请明确传入 `"model_name": "multi_weather_regressors"` 选择 Prophet。
+⚠️ **重要许可证说明**：TimesFM-3 受 **TimesFM 非商业许可证**约束，**禁止用于生产或商业应用**。默认的 Prophet 模型为生产安全（MIT 许可证）。
 
 ## 1. 快速开始
 
@@ -111,6 +111,8 @@ Swagger 文档：
 
 生产环境训练接口，由调度后端传入 JSON 训练记录。
 
+**默认行为（Prophet，生产安全）：**
+
 ```json
 {
   "records": [
@@ -134,11 +136,27 @@ Swagger 文档：
 }
 ```
 
+**可选：TimesFM-3（仅限非商业实验）：**
+
+```json
+{
+  "records": [ /* ... */ ],
+  "holdout_days": 14,
+  "max_training_days": 120,
+  "model_name": "timesfm_weather_holiday"
+}
+```
+
 字段说明：
 
 - `records`：非空按日训练行数组（蛇形字段名，日期格式 `YYYY-MM-DD`）。勿传派生字段 `is_windy_day`、`wind_level`，由服务自动计算。
 - `holdout_days`：用于 MAE/MAPE 评估的验证窗口天数
 - `max_training_days`：训练滚动窗口天数（范围 `60` 到 `720`，默认 `120`）
+- `model_name`：（可选，默认 `"multi_weather_regressors"`）模型后端：
+  - `"multi_weather_regressors"` — Prophet（默认，MIT 许可证，生产安全）
+  - `"timesfm_weather_holiday"` — TimesFM-3（可选非商业实验，需要 timesfm 包）
+
+⚠️ **许可证警告**：TimesFM-3 仅限非商业用途。生产环境请使用默认的 Prophet 模型或明确传入 `"model_name": "multi_weather_regressors"`。
 
 错误码：
 
@@ -149,6 +167,8 @@ Swagger 文档：
 
 本地开发训练接口，从磁盘 CSV 文件加载数据。
 
+**默认（Prophet）：**
+
 ```json
 {
   "csv_path": "data/historical_flow_from_summary.csv",
@@ -157,10 +177,22 @@ Swagger 文档：
 }
 ```
 
+**可选：TimesFM-3 实验：**
+
+```json
+{
+  "csv_path": "data/historical_flow_from_summary.csv",
+  "holdout_days": 14,
+  "max_training_days": 120,
+  "model_name": "timesfm_weather_holiday"
+}
+```
+
 字段说明：
 
 - `csv_path`：历史训练 CSV 路径（相对路径按项目根目录解析）
 - `holdout_days`、`max_training_days`：与 `POST /train` 相同
+- `model_name`：（可选，默认 `"multi_weather_regressors"`）同 `POST /train`
 
 错误码：
 
@@ -171,7 +203,7 @@ Swagger 文档：
 
 响应包含：
 
-- 模型名称（`multi_weather_regressors`）
+- 模型名称（`multi_weather_regressors` 或 `timesfm_weather_holiday`）
 - 回归特征列表
 - 训练数据行数与日期范围
 - 评估指标
@@ -270,6 +302,11 @@ Swagger 文档：
 }
 ```
 
+**注意**：
+- Prophet（默认）包含天气回归特征；通过 `add_country_holidays` 内部处理节假日
+- TimesFM 在回归特征列表中包含 `is_holiday` 和 `is_weekend`
+- 响应格式与训练时使用的模型匹配
+
 ## 4. 调度方集成说明
 
 建议由外部调度后端按日执行：
@@ -277,10 +314,14 @@ Swagger 文档：
 1. 从数仓/API 查询最近 N 天客流与天气。
 2. 映射为下方训练字段（蛇形命名）。
 3. `POST /train` 传入 `records`。
+   - **默认**：使用 Prophet（MIT 许可证，生产安全）除非指定 `model_name`
+   - **可选**：传入 `"model_name": "timesfm_weather_holiday"` 使用 TimesFM-3（仅限非商业实验）
 4. `POST /predict/next-7-days`（模型在进程内存中，需先训练再预测）。
 5. 将预测结果写入业务库。
 
 模型仅存于进程内存；进程重启后需重新调用 `/train`，再调用 `/predict`。
+
+✅ **生产部署**：默认的 Prophet 模型已可用于生产环境。无需指定 `model_name` 参数。
 
 ## 5. 训练数据字段要求
 

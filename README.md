@@ -39,7 +39,71 @@ The default training model is `timesfm_weather_holiday` (TimesFM-3). You can opt
 
 ## 1. Quick Start
 
-### With TimesFM-3 (Default, requires optional dependency)
+### Option A: Docker (Recommended for Reproducible Deployments)
+
+Docker images are automatically built and published to Docker Hub for the `main` branch.
+
+#### Running from Docker Hub
+
+```bash
+# Pull the latest image
+docker pull luolanaatud/traffic-flow-prophet:latest
+
+# Run with environment variables
+docker run -d \
+  -p 8000:8000 \
+  -e QWEATHER_API_KEY=your_api_key \
+  -e QWEATHER_LOCATION=your_location_id \
+  -v timesfm-cache:/root/.cache/huggingface \
+  --name traffic-flow-prophet \
+  luolanaatud/traffic-flow-prophet:latest
+```
+
+**First run:** TimesFM-3 will download ~2GB+ model weights from HuggingFace. The volume mount persists the cache for subsequent runs.
+
+#### Building Locally
+
+```bash
+# Build the image
+docker build -t traffic-flow-prophet .
+
+# Run with docker-compose (recommended)
+cp .env.example .env
+# Edit .env with your QWeather credentials
+docker-compose up -d
+```
+
+#### Required Environment Variables
+
+- `QWEATHER_API_KEY`: Your QWeather API key (required for predictions)
+- `QWEATHER_LOCATION`: QWeather location ID (required for predictions)
+
+#### Docker Image Details
+
+- **Base**: Python 3.11-slim
+- **Size**: ~2GB (includes TimesFM model dependencies)
+- **Platform**: linux/amd64 (CPU-only PyTorch for broad compatibility)
+- **License**: TimesFM-3 non-commercial license applies (switch to Prophet for production)
+- **HuggingFace Cache**: Mount a volume to `/root/.cache/huggingface` to persist model weights
+
+#### GPU Variant (Optional)
+
+The default image uses CPU-only PyTorch for maximum compatibility. For GPU support:
+
+1. Modify `Dockerfile` to use GPU PyTorch index:
+   ```dockerfile
+   # Replace the pip install line with:
+   RUN uv pip install --system --no-cache -e ".[timesfm]"
+   ```
+2. Build with NVIDIA runtime:
+   ```bash
+   docker build -t traffic-flow-prophet:gpu .
+   docker run --gpus all -p 8000:8000 ... traffic-flow-prophet:gpu
+   ```
+
+### Option B: Local Development (Native Python)
+
+#### With TimesFM-3 (Default, requires optional dependency)
 
 ```bash
 uv sync --extra timesfm
@@ -47,7 +111,7 @@ uv sync --extra timesfm
 uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-### Prophet-only (Production-safe, lighter install)
+#### Prophet-only (Production-safe, lighter install)
 
 ```bash
 uv sync
@@ -56,9 +120,11 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
 **Note**: If TimesFM dependencies are not installed, training requests will fail unless you explicitly specify `"model_name": "multi_weather_regressors"` to use Prophet.
 
+### Accessing the API
+
 Swagger docs:
 
-- http://127.0.0.1:8000/docs
+- http://127.0.0.1:8000/docs (or http://localhost:8000/docs for Docker)
 
 ## 2. Project Paths
 
@@ -373,3 +439,49 @@ The implementation uses:
 - Covariate shape: `(C, T+H)` where C=features, T=context length, H=horizon
 - Z-score normalization using training statistics
 - Quantile forecasts (0.1, 0.5, 0.9) for uncertainty bands
+
+## 8. CI/CD and Docker Hub
+
+### Automated Docker Image Builds
+
+Docker images are automatically built and published to [Docker Hub](https://hub.docker.com/r/luolanaatud/traffic-flow-prophet) via GitHub Actions on:
+
+- **Push to `main`**: Builds and tags as `latest` and `<git-sha>`
+- **Version tags** (e.g., `v1.0.0`): Builds and tags as `<version>`, `<major>.<minor>`, `<major>`
+- **Manual trigger**: Via workflow_dispatch
+
+### Required GitHub Secrets
+
+To enable automated builds, configure these secrets in your GitHub repository settings (Settings → Secrets and variables → Actions):
+
+- `DOCKERHUB_USERNAME`: Your Docker Hub username
+- `DOCKERHUB_TOKEN`: Docker Hub access token (NOT your password)
+  - Generate at: [Docker Hub → Account Settings → Security → New Access Token](https://hub.docker.com/settings/security)
+
+### Workflow File
+
+The CI workflow is defined in `.github/workflows/docker-publish.yml` and includes:
+
+- Multi-platform support (currently `linux/amd64`)
+- GitHub Actions cache for faster builds
+- Automatic tagging based on git refs
+- Docker Hub description sync from README
+
+### Verifying Builds
+
+Check build status:
+- GitHub Actions: `https://github.com/luolanaaTUD/traffic-flow-prophet/actions`
+- Docker Hub: `https://hub.docker.com/r/luolanaatud/traffic-flow-prophet/tags`
+
+### Using Published Images
+
+```bash
+# Latest build from main branch
+docker pull luolanaatud/traffic-flow-prophet:latest
+
+# Specific git SHA (for reproducibility)
+docker pull luolanaatud/traffic-flow-prophet:<sha>
+
+# Specific version tag
+docker pull luolanaatud/traffic-flow-prophet:1.0.0
+```

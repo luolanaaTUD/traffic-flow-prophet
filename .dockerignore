@@ -1,0 +1,56 @@
+# Git files
+.git/
+.gitignore
+.github/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+tests/
+*.test
+
+# Data dumps (not needed in image)
+data/*.csv
+output/
+*.csv
+
+# Documentation
+*.md
+docs/
+
+# Jupyter notebooks
+*.ipynb
+jupyter-notebook/
+
+# Lock files (already in image)
+uv.lock
+
+# CI/CD
+.github/

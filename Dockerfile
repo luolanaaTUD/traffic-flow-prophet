@@ -7,23 +7,28 @@ FROM python:3.11-slim AS builder
 
 WORKDIR /build
 
-# Install build dependencies
+# Install build dependencies (required for prophet/cmdstanpy)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy dependency files
-COPY pyproject.toml uv.lock* ./
-
-# Install uv for faster dependency resolution (optional, can use pip directly)
+# Install uv for faster dependency resolution
 RUN pip install --no-cache-dir uv
 
-# Install project with TimesFM extras (default model)
-# Using CPU-only torch to keep image lightweight and usable without GPU
-COPY . .
+# Step 1: Install CPU-only torch first from PyTorch index
+# This prevents pip from pulling GPU torch later
 RUN uv pip install --system --no-cache \
-    -e ".[timesfm]" \
+    torch>=2.0.0,<2.6.0 \
     --index-url https://download.pytorch.org/whl/cpu
+
+# Copy dependency files and project
+COPY pyproject.toml uv.lock* ./
+COPY . .
+
+# Step 2: Install project with TimesFM extras from PyPI
+# Torch is already installed, so this won't reinstall it
+RUN uv pip install --system --no-cache -e ".[timesfm]"
 
 # Runtime stage: minimal image with only runtime dependencies
 FROM python:3.11-slim

@@ -88,18 +88,31 @@ docker-compose up -d
 
 #### GPU Variant (Optional)
 
-The default image uses CPU-only PyTorch for maximum compatibility. For GPU support:
+The default image uses CPU-only PyTorch for maximum compatibility. The Dockerfile uses a two-step installation process:
 
-1. Modify `Dockerfile` to use GPU PyTorch index:
-   ```dockerfile
-   # Replace the pip install line with:
-   RUN uv pip install --system --no-cache -e ".[timesfm]"
-   ```
-2. Build with NVIDIA runtime:
-   ```bash
-   docker build -t traffic-flow-prophet:gpu .
-   docker run --gpus all -p 8000:8000 ... traffic-flow-prophet:gpu
-   ```
+1. **Step 1**: Install CPU-only torch from PyTorch index
+2. **Step 2**: Install project from PyPI (which reuses the already-installed torch)
+
+For GPU support, modify the torch installation step in the `Dockerfile`:
+
+```dockerfile
+# Replace Step 1 (CPU torch) with GPU torch:
+RUN uv pip install --system --no-cache \
+    torch>=2.0.0,<2.6.0 \
+    --index-url https://download.pytorch.org/whl/cu121
+
+# Step 2 remains unchanged:
+RUN uv pip install --system --no-cache -e ".[timesfm]"
+```
+
+Then build and run with NVIDIA runtime:
+
+```bash
+docker build -t traffic-flow-prophet:gpu .
+docker run --gpus all -p 8000:8000 ... traffic-flow-prophet:gpu
+```
+
+**Note**: The two-step installation is required to prevent pip from resolving non-torch packages from the PyTorch index, which would fail.
 
 ### Option B: Local Development (Native Python)
 

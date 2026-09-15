@@ -28,7 +28,11 @@ COPY . .
 
 # Step 2: Install project with TimesFM extras from PyPI
 # Torch is already installed, so this won't reinstall it
-RUN uv pip install --system --no-cache -e ".[timesfm]"
+# Use non-editable install for production (not -e)
+RUN uv pip install --system --no-cache ".[timesfm]"
+
+# Smoke test: verify package can be imported
+RUN python -c "from app.main import app; print('✓ Package import successful')"
 
 # Runtime stage: minimal image with only runtime dependencies
 FROM python:3.11-slim

@@ -6,16 +6,28 @@ This backend is extracted from the notebook workflow and provides:
 
 - model training from JSON records (production) or historical traffic CSV (local dev)
 - next-7-days traffic prediction API
-- **TimesFM-3 forecasting as default backend** with Prophet available as opt-in
+- **Prophet forecasting as default production backend** with TimesFM-3 available as optional non-commercial experiment
 
-The default training model is `timesfm_weather_holiday` (TimesFM-3). You can optionally select `multi_weather_regressors` (Prophet) via the `model_name` parameter.
+The default training model is `multi_weather_regressors` (Prophet). You can optionally select `timesfm_weather_holiday` (TimesFM-3) via the `model_name` parameter.
 
-⚠️ **IMPORTANT LICENSE NOTICE**: The default TimesFM-3 model is subject to the **TimesFM Non-Commercial License** and **must NOT be used for production or commercial applications**. For production use, explicitly select Prophet by passing `"model_name": "multi_weather_regressors"`.
+⚠️ **IMPORTANT LICENSE NOTICE**: TimesFM-3 is subject to the **TimesFM Non-Commercial License** and **must NOT be used for production or commercial applications**. The default Prophet model is production-safe (MIT license).
 
 ## Model Selection
 
-### TimesFM-3 (Default, Non-Commercial)
-- Model name: `timesfm_weather_holiday` (DEFAULT)
+### Prophet (Default, Production-Safe)
+- Model name: `multi_weather_regressors` (DEFAULT)
+- License: MIT (production-safe)
+- Production-ready model for traffic forecasting
+- Features:
+  - Weather covariates (temp_max, temp_min, precip, humidity, pressure, vis, cloud, uv_index, wind_speed_day, wind_speed_night, is_windy_day)
+  - CN holidays via `add_country_holidays(country_name="CN")`
+  - Weekly seasonality
+  - Log-transform of target to prevent negative/zero predictions
+  - Additive regressors with tuned prior scales
+- This is the recommended model for production deployments
+
+### TimesFM-3 (Optional, Non-Commercial Experiment)
+- Model name: `timesfm_weather_holiday`
 - Checkpoint: `google/timesfm-3.0-pytorch`
 - API: TimesFM-3.x (`timesfm3.TimesFM3Evaluator` + `ModelConfig`)
 - License: **TimesFM Non-Commercial License** (non-commercial / non-production use only)
@@ -27,15 +39,10 @@ The default training model is `timesfm_weather_holiday` (TimesFM-3). You can opt
   - Multivariate forecasting mode (`univariate=False`, covariates shape `(C, T+H)`)
   - Z-score normalization of weather features
   - Quantile forecasts for uncertainty bands
+- To use TimesFM, explicitly pass `"model_name": "timesfm_weather_holiday"` in training requests
 - Offline evaluation (~198 days) showed TimesFM with weather + holidays beating Prophet on MAE/RMSE/MAPE
 
-### Prophet (Production-Safe Opt-In)
-- Model name: `multi_weather_regressors`
-- License: MIT (production-safe)
-- Baseline model for traffic forecasting
-- To use Prophet, explicitly pass `"model_name": "multi_weather_regressors"` in training requests
-
-**⚠️ WARNING**: If you omit `model_name`, the service uses TimesFM by default, which requires the optional `timesfm` package. If not installed, training will fail with an explicit error. Install TimesFM dependencies or explicitly specify Prophet for production use.
+**Note**: If you omit `model_name`, the service uses Prophet by default (production-safe). TimesFM requires the optional `timesfm` package and is subject to non-commercial license restrictions.
 
 ## 1. Quick Start
 
@@ -163,7 +170,7 @@ Response example:
 
 Production training from JSON records (used by the orchestrator backend).
 
-**Default behavior (TimesFM-3, non-commercial license):**
+**Default behavior (Prophet, production-safe):**
 
 ```json
 {
@@ -188,14 +195,14 @@ Production training from JSON records (used by the orchestrator backend).
 }
 ```
 
-**Production-safe opt-in (Prophet, MIT license):**
+**Optional: TimesFM-3 (non-commercial experiment only):**
 
 ```json
 {
   "records": [ /* ... */ ],
   "holdout_days": 14,
   "max_training_days": 120,
-  "model_name": "multi_weather_regressors"
+  "model_name": "timesfm_weather_holiday"
 }
 ```
 
@@ -204,11 +211,11 @@ Field notes:
 - `records`: non-empty array of daily training rows (snake_case fields, date `YYYY-MM-DD`). Do not send derived fields `is_windy_day` or `wind_level`; the service computes them.
 - `holdout_days`: validation window for MAE/MAPE evaluation
 - `max_training_days`: rolling history window for training (`60` to `720`, default `120`)
-- `model_name`: (optional, default `"timesfm_weather_holiday"`) Model backend to use:
-  - `"timesfm_weather_holiday"` — TimesFM-3 (DEFAULT, non-commercial license, requires timesfm package)
-  - `"multi_weather_regressors"` — Prophet (MIT license, production-safe)
+- `model_name`: (optional, default `"multi_weather_regressors"`) Model backend to use:
+  - `"multi_weather_regressors"` — Prophet (DEFAULT, MIT license, production-safe)
+  - `"timesfm_weather_holiday"` — TimesFM-3 (optional non-commercial experiment, requires timesfm package)
 
-⚠️ **License Warning**: The default TimesFM-3 model is non-commercial. For production use, explicitly pass `"model_name": "multi_weather_regressors"`.
+⚠️ **License Warning**: TimesFM-3 is non-commercial only. For production use, use the default Prophet model or explicitly pass `"model_name": "multi_weather_regressors"`.
 
 Errors:
 
@@ -220,7 +227,7 @@ Errors:
 
 Local dev training from a CSV file on disk.
 
-**Default (TimesFM-3):**
+**Default (Prophet):**
 
 ```json
 {
@@ -230,14 +237,14 @@ Local dev training from a CSV file on disk.
 }
 ```
 
-**Prophet opt-in:**
+**Optional: TimesFM-3 experiment:**
 
 ```json
 {
   "csv_path": "data/historical_flow_from_summary.csv",
   "holdout_days": 14,
   "max_training_days": 120,
-  "model_name": "multi_weather_regressors"
+  "model_name": "timesfm_weather_holiday"
 }
 ```
 
@@ -245,7 +252,7 @@ Field notes:
 
 - `csv_path`: historical training CSV path (relative paths resolve against project root)
 - `holdout_days`, `max_training_days`: same as `POST /train`
-- `model_name`: (optional, default `"timesfm_weather_holiday"`) same as `POST /train`
+- `model_name`: (optional, default `"multi_weather_regressors"`) same as `POST /train`
 
 Errors:
 
@@ -257,7 +264,7 @@ Both training endpoints return the same response shape:
 
 Response includes:
 
-- selected model name (`timesfm_weather_holiday` or `multi_weather_regressors`)
+- selected model name (`multi_weather_regressors` or `timesfm_weather_holiday`)
 - regressors
 - training date range and row count
 - evaluation metrics
@@ -307,7 +314,7 @@ Response example:
 
 ```json
 {
-  "model_name": "timesfm_weather_holiday",
+  "model_name": "multi_weather_regressors",
   "regressors": [
     "temp_max",
     "temp_min",
@@ -319,9 +326,7 @@ Response example:
     "uv_index",
     "wind_speed_day",
     "wind_speed_night",
-    "is_windy_day",
-    "is_holiday",
-    "is_weekend"
+    "is_windy_day"
   ],
   "generated_from": "qweather_7d",
   "predictions": [
@@ -336,8 +341,8 @@ Response example:
 ```
 
 **Note**: 
-- TimesFM (default) includes `is_holiday` and `is_weekend` in regressors
-- Prophet includes only weather regressors (holidays handled internally)
+- Prophet (default) includes weather regressors; holidays handled internally via `add_country_holidays`
+- TimesFM includes `is_holiday` and `is_weekend` in regressors list
 - Response format matches whichever model was used during training
 
 ## 4. Orchestrator integration
@@ -347,14 +352,14 @@ Recommended daily flow for an external scheduler backend:
 1. Query the latest N days of traffic + weather from your data warehouse/API.
 2. Map columns to the training schema below (snake_case).
 3. `POST /train` with `records`.
-   - **Default**: Uses TimesFM-3 (non-commercial license) unless `model_name` specified
-   - **Production**: Pass `"model_name": "multi_weather_regressors"` for Prophet (MIT license)
+   - **Default**: Uses Prophet (MIT license, production-safe) unless `model_name` specified
+   - **Optional**: Pass `"model_name": "timesfm_weather_holiday"` for TimesFM-3 (non-commercial experiment only)
 4. `POST /predict/next-7-days` (model is in-memory per process; train must run first in the same instance or before predict).
 5. Persist prediction results in your system.
 
 The trained model is held in process memory only; restart the service or call `/train` again before `/predict` if the process was recycled.
 
-⚠️ **For production deployments**: Explicitly pass `"model_name": "multi_weather_regressors"` in all training requests to use the MIT-licensed Prophet model. The default TimesFM-3 model is subject to non-commercial license restrictions.
+✅ **Production deployments**: The default Prophet model is production-ready. No `model_name` parameter needed.
 
 ## 5. Training data schema
 
@@ -388,9 +393,9 @@ Legacy compatibility:
 - If critical features (`wind_speed_day`, `vis`, `cloud`) are too low-variance, training fails with an explicit error.
 - For low-confidence regressors, Prophet applies lower prior scales to reduce overfitting to synthetic proxies.
 
-## 7. Testing TimesFM-3 (Optional Backend)
+## 7. Testing TimesFM-3 (Optional Non-Commercial Experiment)
 
-Since TimesFM-3 requires downloading large model weights (~2GB+), automated CI tests run Prophet only. To manually test TimesFM:
+TimesFM-3 is an optional backend for non-commercial experiments. Since it requires downloading large model weights (~2GB+), automated CI tests run Prophet only. To manually test TimesFM:
 
 ### Setup
 

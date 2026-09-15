@@ -36,8 +36,8 @@ class TrainRequest(BaseModel):
     holdout_days: int = Field(default=14, ge=7, le=365)
     max_training_days: int = Field(default=120, ge=60, le=720)
     model_name: str = Field(
-        default="timesfm_weather_holiday",
-        description="Model backend: 'timesfm_weather_holiday' (TimesFM-3, DEFAULT, non-commercial license) or 'multi_weather_regressors' (Prophet, production-safe opt-in)"
+        default="multi_weather_regressors",
+        description="Model backend: 'multi_weather_regressors' (Prophet, DEFAULT, production-safe) or 'timesfm_weather_holiday' (TimesFM-3, optional non-commercial experiment)"
     )
 
 
@@ -48,8 +48,8 @@ class TrainFromCsvRequest(BaseModel):
     holdout_days: int = Field(default=14, ge=7, le=365)
     max_training_days: int = Field(default=120, ge=60, le=720)
     model_name: str = Field(
-        default="timesfm_weather_holiday",
-        description="Model backend: 'timesfm_weather_holiday' (TimesFM-3, DEFAULT, non-commercial license) or 'multi_weather_regressors' (Prophet, production-safe opt-in)"
+        default="multi_weather_regressors",
+        description="Model backend: 'multi_weather_regressors' (Prophet, DEFAULT, production-safe) or 'timesfm_weather_holiday' (TimesFM-3, optional non-commercial experiment)"
     )
 
 

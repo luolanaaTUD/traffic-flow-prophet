@@ -26,6 +26,7 @@ class ModelArtifacts:
     metrics: list[EvaluationResult]
     trained_at: datetime
     backend: str  # 'prophet' or 'timesfm'
+    use_log_transform: bool = False  # For Prophet: whether target was log-transformed
 
 
 class TrafficModelService:
@@ -42,7 +43,7 @@ class TrafficModelService:
         csv_path: str,
         holdout_days: int = 14,
         max_training_days: int = 120,
-        model_name: str = "timesfm_weather_holiday",
+        model_name: str = "multi_weather_regressors",
     ) -> dict:
         raw_df = load_training_csv(csv_path)
         return self.train_from_dataframe(
@@ -57,7 +58,7 @@ class TrafficModelService:
         records: list[dict],
         holdout_days: int = 14,
         max_training_days: int = 120,
-        model_name: str = "timesfm_weather_holiday",
+        model_name: str = "multi_weather_regressors",
     ) -> dict:
         raw_df = records_to_dataframe(records)
         return self.train_from_dataframe(
@@ -72,7 +73,7 @@ class TrafficModelService:
         raw_df: pd.DataFrame,
         holdout_days: int = 14,
         max_training_days: int = 120,
-        model_name: str = "timesfm_weather_holiday",
+        model_name: str = "multi_weather_regressors",
     ) -> dict:
         # Validate model_name
         valid_models = {"multi_weather_regressors", "timesfm_weather_holiday"}
@@ -100,9 +101,10 @@ class TrafficModelService:
                 holdout_days=holdout_days,
                 low_confidence_regressors=set(quality_report["low_confidence_regressors"]),
             )
+            use_log_transform = False  # TimesFM handles scaling internally
         else:
             backend = "prophet"
-            model, returned_model_name, regressors, metrics = train_multi_model(
+            model, returned_model_name, regressors, metrics, use_log_transform = train_multi_model(
                 df=train_df,
                 holdout_days=holdout_days,
                 low_confidence_regressors=set(quality_report["low_confidence_regressors"]),
@@ -116,6 +118,7 @@ class TrafficModelService:
             metrics=metrics,
             trained_at=datetime.now(UTC),
             backend=backend,
+            use_log_transform=use_log_transform,
         )
 
         with self._lock:
@@ -176,8 +179,15 @@ class TrafficModelService:
 
             forecast = artifacts.model.predict(future_for_model)
             result = forecast[["ds", "yhat", "yhat_lower", "yhat_upper"]].copy()
+            
+            # Apply inverse log transform if model was trained on log-transformed target
+            if artifacts.use_log_transform:
+                import numpy as np
+                result["yhat"] = np.expm1(result["yhat"])
+                result["yhat_lower"] = np.expm1(result["yhat_lower"])
+                result["yhat_upper"] = np.expm1(result["yhat_upper"])
         
-        # Ensure integer output and non-negative values
+        # Ensure integer output and non-negative values (safety clip after transform)
         for col in ["yhat", "yhat_lower", "yhat_upper"]:
             result[col] = result[col].clip(lower=0).round().astype(int)
 

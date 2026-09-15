@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  traffic-flow-prophet:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: traffic-flow-prophet-backend
+    ports:
+      - "8000:8000"
+    environment:
+      # QWeather API credentials (required for predictions)
+      - QWEATHER_API_KEY=${QWEATHER_API_KEY}
+      - QWEATHER_LOCATION=${QWEATHER_LOCATION}
+      # Optional: override QWeather base URL
+      - QWEATHER_BASE_URL=${QWEATHER_BASE_URL:-https://devapi.qweather.com/v7/weather/7d}
+    volumes:
+      # Mount cache directory for HuggingFace model weights
+      # First run downloads ~2GB+ TimesFM checkpoint; volume persists it
+      - huggingface-cache:/root/.cache/huggingface
+      # Optional: mount local data directory for testing
+      # - ./data:/app/data:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  huggingface-cache:
+    driver: local

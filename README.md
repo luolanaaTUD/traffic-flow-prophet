@@ -98,7 +98,7 @@ For GPU support, modify the torch installation step in the `Dockerfile`:
 ```dockerfile
 # Replace Step 1 (CPU torch) with GPU torch:
 RUN uv pip install --system --no-cache \
-    torch>=2.0.0,<2.6.0 \
+    "torch>=2.0.0,<2.6.0" \
     --index-url https://download.pytorch.org/whl/cu121
 
 # Step 2 remains unchanged:

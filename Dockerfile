@@ -19,7 +19,7 @@ RUN pip install --no-cache-dir uv
 # Step 1: Install CPU-only torch first from PyTorch index
 # This prevents pip from pulling GPU torch later
 RUN uv pip install --system --no-cache \
-    torch>=2.0.0,<2.6.0 \
+    "torch>=2.0.0,<2.6.0" \
     --index-url https://download.pytorch.org/whl/cpu
 
 # Copy dependency files and project

@@ -6,19 +6,86 @@
 
 - 基于 JSON 训练记录（生产环境）或历史客流 CSV（本地开发）的模型训练
 - 未来 7 天客流预测 API
+- **TimesFM-3 作为默认预测模型**，Prophet 可选
 
-训练模型固定为 `multi_weather_regressors`（不再做 baseline 切换）。
+默认训练模型为 `timesfm_weather_holiday` (TimesFM-3)。可通过 `model_name` 参数选择 `multi_weather_regressors` (Prophet)。
+
+⚠️ **重要许可证说明**：默认的 TimesFM-3 模型受 **TimesFM 非商业许可证**约束，**禁止用于生产或商业应用**。生产环境使用时，请明确传入 `"model_name": "multi_weather_regressors"` 选择 Prophet。
 
 ## 1. 快速开始
+
+### 选项 A：Docker（推荐用于可复现部署）
+
+Docker 镜像会在 `main` 分支更新时自动构建并发布到 Docker Hub。
+
+#### 从 Docker Hub 运行
+
+```bash
+# 拉取最新镜像
+docker pull luolanaatud/traffic-flow-prophet:latest
+
+# 使用环境变量运行
+docker run -d \
+  -p 8000:8000 \
+  -e QWEATHER_API_KEY=你的API密钥 \
+  -e QWEATHER_LOCATION=你的位置ID \
+  -v timesfm-cache:/root/.cache/huggingface \
+  --name traffic-flow-prophet \
+  luolanaatud/traffic-flow-prophet:latest
+```
+
+**首次运行**：TimesFM-3 会从 HuggingFace 下载约 2GB+ 的模型权重。挂载卷可为后续运行持久化缓存。
+
+#### 本地构建
+
+```bash
+# 构建镜像
+docker build -t traffic-flow-prophet .
+
+# 使用 docker-compose 运行（推荐）
+cp .env.example .env
+# 编辑 .env 填入您的 QWeather 凭据
+docker-compose up -d
+```
+
+#### 必需的环境变量
+
+- `QWEATHER_API_KEY`：您的 QWeather API 密钥（预测功能必需）
+- `QWEATHER_LOCATION`：QWeather 位置 ID（预测功能必需）
+
+#### Docker 镜像详情
+
+- **基础镜像**：Python 3.11-slim
+- **大小**：约 2GB（含 TimesFM 模型依赖）
+- **平台**：linux/amd64（仅 CPU 的 PyTorch，广泛兼容）
+- **许可证**：TimesFM-3 非商业许可证适用（生产环境请切换到 Prophet）
+- **HuggingFace 缓存**：挂载卷到 `/root/.cache/huggingface` 以持久化模型权重
+
+### 选项 B：本地开发（原生 Python）
+
+#### 使用 TimesFM-3（默认，需要可选依赖）
+
+```bash
+uv sync --extra timesfm
+# 或: pip install -e ".[timesfm]"
+uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+#### 仅使用 Prophet（生产安全，安装更轻量）
 
 ```bash
 uv sync
 uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
+**注意**：如果未安装 TimesFM 依赖，训练请求将失败，除非您明确指定 `"model_name": "multi_weather_regressors"` 使用 Prophet。
+
+### 访问 API
+
 Swagger 文档：
 
-- http://127.0.0.1:8000/docs
+- http://127.0.0.1:8000/docs（本地开发）
+- http://localhost:8000/docs（Docker 运行）
 
 ## 2. 项目路径约定
 
